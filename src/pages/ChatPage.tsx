@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper, Star } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
@@ -50,6 +50,12 @@ interface PendingInSessionSearchPayload {
 }
 
 interface PendingFootprintJumpPayload {
+  sessionId: string
+  localId: number
+  createTime: number
+}
+
+interface PendingMessageAnalysisJumpPayload {
   sessionId: string
   localId: number
   createTime: number
@@ -1613,6 +1619,8 @@ function ChatPage(props: ChatPageProps) {
   const [globalMsgSearchError, setGlobalMsgSearchError] = useState<string | null>(null)
   const pendingInSessionSearchRef = useRef<PendingInSessionSearchPayload | null>(null)
   const pendingFootprintJumpRef = useRef<PendingFootprintJumpPayload | null>(null)
+  const pendingMessageAnalysisJumpRef = useRef<PendingMessageAnalysisJumpPayload | null>(null)
+  const messageAnalysisJumpLoadKeyRef = useRef<string | null>(null)
   const pendingQuotedMessageJumpRef = useRef<QuotedMessageJumpTarget | null>(null)
   const loadMessagesRef = useRef<LoadMessagesFn | null>(null)
   const pendingGlobalMsgSearchReplayRef = useRef<string | null>(null)
@@ -1637,6 +1645,8 @@ function ChatPage(props: ChatPageProps) {
 
 
   const highlightedMessageSet = useMemo(() => new Set(highlightedMessageKeys), [highlightedMessageKeys])
+  const [aiMessageInsightEnabled, setAiMessageInsightEnabled] = useState(false)
+  const [aiMessageInsightContextCount, setAiMessageInsightContextCount] = useState(50)
   const messageKeySetRef = useRef<Set<string>>(new Set())
   const lastMessageTimeRef = useRef(0)
   const isMessageListAtBottomRef = useRef(true)
@@ -3096,6 +3106,36 @@ function ChatPage(props: ChatPageProps) {
   }, [])
 
   useEffect(() => {
+    let canceled = false
+
+    const loadMessageInsightConfig = () => {
+      void Promise.all([
+        configService.getAiMessageInsightEnabled(),
+        configService.getAiMessageInsightContextCount()
+      ])
+        .then(([enabled, contextCount]) => {
+          if (canceled) return
+          setAiMessageInsightEnabled(enabled)
+          setAiMessageInsightContextCount(contextCount)
+        })
+        .catch((error) => {
+          console.warn('加载消息解析配置失败:', error)
+          if (canceled) return
+          setAiMessageInsightEnabled(false)
+          setAiMessageInsightContextCount(50)
+        })
+    }
+
+    loadMessageInsightConfig()
+    const handleFocus = () => loadMessageInsightConfig()
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      canceled = true
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     void (async () => {
       const scope = await resolveChatCacheScope()
@@ -3111,6 +3151,7 @@ function ChatPage(props: ChatPageProps) {
   // 同步 currentSessionId 到 ref
   useEffect(() => {
     currentSessionRef.current = currentSessionId
+    messageInsightMemoryCache.clear()
     isMessageListAtBottomRef.current = true
     topRangeLoadLockRef.current = false
     bottomRangeLoadLockRef.current = false
@@ -5115,6 +5156,66 @@ function ChatPage(props: ChatPageProps) {
     }, 220)
   }, [currentSessionId, flashNewMessages, getMessageKey, loadMessages])
 
+  const findMessageAnalysisTargetInMessages = useCallback((target: PendingMessageAnalysisJumpPayload): { index: number; message: Message } | null => {
+    if (messages.length === 0) return null
+    const targetLocalId = Math.floor(Number(target.localId || 0))
+    const targetCreateTime = Math.floor(Number(target.createTime || 0))
+    if (targetLocalId <= 0 && targetCreateTime <= 0) return null
+
+    let bestIndex = -1
+    let bestMessage: Message | null = null
+    let bestScore = -1
+    for (let index = 0; index < messages.length; index++) {
+      const item = messages[index]
+      const localId = Math.floor(Number(item.localId || 0))
+      const createTime = Math.floor(Number(item.createTime || 0))
+      const localIdMatch = targetLocalId > 0 && localId === targetLocalId
+      const exactTimeMatch = targetCreateTime > 0 && createTime === targetCreateTime
+      const nearTimeMatch = targetCreateTime > 0 && Math.abs(createTime - targetCreateTime) <= 1
+      if (!localIdMatch && !exactTimeMatch && !nearTimeMatch) continue
+
+      const score = (localIdMatch ? 100 : 0) + (exactTimeMatch ? 40 : (nearTimeMatch ? 20 : 0))
+      if (score > bestScore) {
+        bestIndex = index
+        bestMessage = item
+        bestScore = score
+      }
+    }
+    return bestMessage ? { index: bestIndex, message: bestMessage } : null
+  }, [messages])
+
+  const jumpToMessageAnalysisTarget = useCallback((target: PendingMessageAnalysisJumpPayload, behavior: 'auto' | 'smooth' = 'auto') => {
+    const resolved = findMessageAnalysisTargetInMessages(target)
+    if (resolved) {
+      pendingMessageAnalysisJumpRef.current = null
+      messageAnalysisJumpLoadKeyRef.current = null
+      scrollToResolvedMessage(resolved, behavior)
+      navigate('/chat', { replace: true })
+      return true
+    }
+    return false
+  }, [findMessageAnalysisTargetInMessages, navigate, scrollToResolvedMessage])
+
+  const requestMessageAnalysisWindowLoad = useCallback((target: PendingMessageAnalysisJumpPayload) => {
+    const targetSessionId = String(target.sessionId || '').trim()
+    const targetTime = Math.floor(Number(target.createTime || 0))
+    if (!targetSessionId || targetTime <= 0) return
+    const loadKey = `${targetSessionId}:${Math.floor(Number(target.localId || 0))}:${targetTime}`
+    if (messageAnalysisJumpLoadKeyRef.current === loadKey) return
+    messageAnalysisJumpLoadKeyRef.current = loadKey
+
+    const requestSeq = inSessionResultJumpRequestSeqRef.current + 1
+    inSessionResultJumpRequestSeqRef.current = requestSeq
+    setCurrentOffset(0)
+    setJumpStartTime(0)
+    setJumpEndTime(targetTime + 1)
+    suppressAutoLoadLaterRef.current = true
+    void loadMessagesRef.current?.(targetSessionId, 0, 0, targetTime + 1, false, {
+      forceInitialLimit: 120,
+      inSessionJumpRequestSeq: requestSeq
+    })
+  }, [])
+
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
     suppressScrollToBottomButton(220)
@@ -5868,7 +5969,7 @@ function ChatPage(props: ChatPageProps) {
     selectSessionById
   ])
 
-  // 监听 URL 参数中的会话/锚点（通知跳转 + 足迹锚点定位）
+  // 监听 URL 参数中的会话/锚点（通知跳转 + 足迹/深度解析锚点定位）
   useEffect(() => {
     if (standaloneSessionWindow) return // standalone模式由上面的useEffect处理
     const params = new URLSearchParams(location.search)
@@ -5879,6 +5980,11 @@ function ChatPage(props: ChatPageProps) {
     const jumpLocalId = Number.parseInt(String(params.get('jumpLocalId') || ''), 10)
     const jumpCreateTime = Number.parseInt(String(params.get('jumpCreateTime') || ''), 10)
     const hasFootprintAnchor = jumpSource === 'footprint'
+      && Number.isFinite(jumpLocalId)
+      && jumpLocalId > 0
+      && Number.isFinite(jumpCreateTime)
+      && jumpCreateTime > 0
+    const hasMessageAnalysisAnchor = jumpSource === 'messageAnalysis'
       && Number.isFinite(jumpLocalId)
       && jumpLocalId > 0
       && Number.isFinite(jumpCreateTime)
@@ -5912,7 +6018,27 @@ function ChatPage(props: ChatPageProps) {
       return
     }
 
+    if (hasMessageAnalysisAnchor) {
+      const pendingTarget = {
+        sessionId: urlSessionId,
+        localId: jumpLocalId,
+        createTime: jumpCreateTime
+      }
+      messageAnalysisJumpLoadKeyRef.current = null
+      pendingMessageAnalysisJumpRef.current = pendingTarget
+      if (currentSessionId !== urlSessionId) {
+        selectSessionById(urlSessionId)
+        return
+      }
+      if (!jumpToMessageAnalysisTarget(pendingTarget, 'auto')) {
+        requestMessageAnalysisWindowLoad(pendingTarget)
+      }
+      return
+    }
+
     pendingFootprintJumpRef.current = null
+    pendingMessageAnalysisJumpRef.current = null
+    messageAnalysisJumpLoadKeyRef.current = null
     if (currentSessionId !== urlSessionId) {
       selectSessionById(urlSessionId)
     }
@@ -5926,6 +6052,8 @@ function ChatPage(props: ChatPageProps) {
     currentSessionId,
     selectSessionById,
     handleInSessionResultJump,
+    jumpToMessageAnalysisTarget,
+    requestMessageAnalysisWindowLoad,
     navigate
   ])
 
@@ -5951,6 +6079,24 @@ function ChatPage(props: ChatPageProps) {
     pendingFootprintJumpRef.current = null
     navigate('/chat', { replace: true })
   }, [isConnected, isConnecting, currentSessionId, handleInSessionResultJump, navigate])
+
+  useEffect(() => {
+    const pending = pendingMessageAnalysisJumpRef.current
+    if (!pending) return
+    if (!isConnected || isConnecting) return
+    if (currentSessionId !== pending.sessionId) return
+    if (jumpToMessageAnalysisTarget(pending, 'auto')) return
+    if (isLoadingMessages || isSessionSwitching) return
+    requestMessageAnalysisWindowLoad(pending)
+  }, [
+    isConnected,
+    isConnecting,
+    currentSessionId,
+    isLoadingMessages,
+    isSessionSwitching,
+    jumpToMessageAnalysisTarget,
+    requestMessageAnalysisWindowLoad
+  ])
 
   useEffect(() => {
     if (!standaloneSessionWindow || !normalizedInitialSessionId) return
@@ -6887,6 +7033,8 @@ function ChatPage(props: ChatPageProps) {
           messageKey={messageKey}
           isSelected={selectedMessages.has(messageKey)}
           onToggleSelection={handleToggleSelection}
+          aiMessageInsightEnabled={aiMessageInsightEnabled}
+          aiMessageInsightContextCount={aiMessageInsightContextCount}
         />
       </div>
     )
@@ -6906,7 +7054,9 @@ function ChatPage(props: ChatPageProps) {
     handleJumpToQuotedMessage,
     isSelectionMode,
     selectedMessages,
-    handleToggleSelection
+    handleToggleSelection,
+    aiMessageInsightEnabled,
+    aiMessageInsightContextCount
   ])
 
   return (
@@ -8401,6 +8551,32 @@ const senderAvatarCache = createBoundedCache<{ avatarUrl?: string; displayName?:
 })
 const senderAvatarLoading = new Map<string, Promise<{ avatarUrl?: string; displayName?: string } | null>>()
 
+type MessageInsightAnalysis = {
+  explicitText: string
+  emotion: string
+  intent: string
+  topic: string
+}
+
+type MessageInsightState = {
+  status: 'idle' | 'loading' | 'success' | 'error'
+  data?: MessageInsightAnalysis
+  error?: string
+  cached?: boolean
+  recordId?: string
+}
+
+const messageInsightMemoryCache = new Map<string, MessageInsightState>()
+
+function buildMessageInsightCacheKey(sessionId: string, message: Message, messageKey: string): string {
+  return [
+    String(sessionId || '').trim(),
+    Math.floor(Number(message.localId || 0)),
+    Math.floor(Number(message.createTime || 0)),
+    messageKey
+  ].join(':')
+}
+
 function getSharedImageDecryptTask(
   key: string,
   createTask: () => Promise<SharedImageDecryptResult>
@@ -8456,6 +8632,181 @@ function QuotedEmoji({ cdnUrl, md5 }: { cdnUrl: string; md5?: string }) {
 }
 
 // 消息气泡组件
+function MessageInsightControl({
+  message,
+  messageKey,
+  session,
+  displayName,
+  avatarUrl,
+  senderName,
+  targetText,
+  contextCount
+}: {
+  message: Message
+  messageKey: string
+  session: ChatSession
+  displayName?: string
+  avatarUrl?: string
+  senderName?: string
+  targetText: string
+  contextCount: number
+}) {
+  const anchorRef = useRef<HTMLButtonElement | null>(null)
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const cacheKey = useMemo(() => buildMessageInsightCacheKey(session.username, message, messageKey), [message, messageKey, session.username])
+  const [open, setOpen] = useState(false)
+  const [state, setState] = useState<MessageInsightState>(() => messageInsightMemoryCache.get(cacheKey) || { status: 'idle' })
+  const [position, setPosition] = useState<{ top: number; left: number; placement: 'top' | 'bottom' }>({ top: 0, left: 0, placement: 'top' })
+
+  useEffect(() => {
+    setState(messageInsightMemoryCache.get(cacheKey) || { status: 'idle' })
+    setOpen(false)
+  }, [cacheKey])
+
+  const updatePosition = useCallback(() => {
+    const anchor = anchorRef.current
+    if (!anchor) return
+    const rect = anchor.getBoundingClientRect()
+    const cardWidth = cardRef.current?.offsetWidth || 320
+    const cardHeight = cardRef.current?.offsetHeight || 190
+    const gap = 10
+    const preferredTop = rect.top - cardHeight - gap
+    const placement: 'top' | 'bottom' = preferredTop < 8 ? 'bottom' : 'top'
+    const top = placement === 'top' ? preferredTop : rect.bottom + gap
+    const left = Math.min(Math.max(8, rect.left + 20), Math.max(8, window.innerWidth - cardWidth - 8))
+    setPosition({
+      top: Math.min(Math.max(8, top), Math.max(8, window.innerHeight - cardHeight - 8)),
+      left,
+      placement
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updatePosition()
+    const handle = () => updatePosition()
+    window.addEventListener('resize', handle)
+    window.addEventListener('scroll', handle, true)
+    return () => {
+      window.removeEventListener('resize', handle)
+      window.removeEventListener('scroll', handle, true)
+    }
+  }, [open, updatePosition])
+
+  const requestInsight = useCallback(async (forceRefresh = false) => {
+    if (!forceRefresh) {
+      const cached = messageInsightMemoryCache.get(cacheKey)
+      if (cached?.status === 'success') {
+        setState(cached)
+        return
+      }
+    }
+    setState({ status: 'loading' })
+    try {
+      const result = await window.electronAPI.insight.generateMessageInsight({
+        sessionId: session.username,
+        displayName: displayName || session.displayName || session.username,
+        avatarUrl: avatarUrl || session.avatarUrl,
+        targetLocalId: message.localId,
+        targetCreateTime: message.createTime,
+        targetMessageKey: messageKey,
+        targetText,
+        targetSenderName: senderName || displayName || session.displayName || session.username,
+        contextCount,
+        forceRefresh
+      })
+      if (result.success && result.data) {
+        const nextState: MessageInsightState = {
+          status: 'success',
+          data: result.data,
+          cached: result.cached === true,
+          recordId: result.recordId
+        }
+        messageInsightMemoryCache.set(cacheKey, nextState)
+        setState(nextState)
+      } else {
+        setState({ status: 'error', error: result.message || '解析失败' })
+      }
+    } catch (error) {
+      setState({ status: 'error', error: (error as Error).message || '解析失败' })
+    }
+  }, [avatarUrl, cacheKey, contextCount, displayName, message.createTime, message.localId, messageKey, senderName, session.avatarUrl, session.displayName, session.username, targetText])
+
+  const handleOpen = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation()
+    setOpen(true)
+    window.setTimeout(updatePosition, 0)
+    const cached = messageInsightMemoryCache.get(cacheKey)
+    if (cached?.status === 'success') {
+      setState(cached)
+      return
+    }
+    void requestInsight(false)
+  }, [cacheKey, requestInsight, updatePosition])
+
+  const card = open ? createPortal(
+    <>
+      <button className="message-insight-backdrop" type="button" aria-label="关闭深度解析" onClick={() => setOpen(false)} />
+      <div
+        ref={cardRef}
+        className={`message-insight-card open placement-${position.placement}`}
+        style={{ top: position.top, left: position.left }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="message-insight-card-header">
+          <Star size={14} />
+          <span>深度解析</span>
+          <button
+            type="button"
+            className="message-insight-refresh"
+            title="重新解析"
+            onClick={() => void requestInsight(true)}
+            disabled={state.status === 'loading'}
+          >
+            {state.status === 'loading' ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+          </button>
+        </div>
+        <div className="message-insight-card-body">
+          {state.status === 'loading' && (
+            <div className="message-insight-loading">
+              <Loader2 size={15} className="spin" />
+              <span>解析中...</span>
+            </div>
+          )}
+          {state.status === 'error' && (
+            <div className="message-insight-error">
+              <span>{state.error || '解析失败'}</span>
+              <button type="button" onClick={() => void requestInsight(true)}>重试</button>
+            </div>
+          )}
+          {state.status === 'success' && state.data && (
+            <>
+              <p className="message-insight-text">{state.data.explicitText}</p>
+              <div className="message-insight-divider" />
+              <div className="message-insight-tags">
+                <span className="message-insight-tag mood">情绪：{state.data.emotion}</span>
+                <span className="message-insight-tag intent">意图：{state.data.intent}</span>
+                <span className="message-insight-tag">话题：{state.data.topic}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>,
+    document.body
+  ) : null
+
+  return (
+    <>
+      <button ref={anchorRef} type="button" className="message-insight-trigger" onClick={handleOpen} title="深度解析">
+        <Star size={12} />
+        <span>深度解析</span>
+      </button>
+      {card}
+    </>
+  )
+}
+
 function MessageBubble({
   message,
   messageKey,
@@ -8471,7 +8822,9 @@ function MessageBubble({
   onJumpToQuotedMessage,
   isSelectionMode,
   isSelected,
-  onToggleSelection
+  onToggleSelection,
+  aiMessageInsightEnabled,
+  aiMessageInsightContextCount
 }: {
   message: Message;
   messageKey: string;
@@ -8488,6 +8841,8 @@ function MessageBubble({
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelection?: (messageKey: string, isShiftKey?: boolean) => void;
+  aiMessageInsightEnabled?: boolean;
+  aiMessageInsightContextCount?: number;
 }) {
   const isSystem = isSystemMessage(message.localType)
   const isEmoji = message.localType === 47
@@ -9706,6 +10061,32 @@ function MessageBubble({
   const avatarUrl = isSent
     ? (myAvatarUrl || resolvedSenderAvatarUrl)
     : (isGroupChat ? resolvedSenderAvatarUrl : session.avatarUrl)
+  const canShowMessageInsight = Boolean(
+    aiMessageInsightEnabled &&
+    !isSent &&
+    !isSystem &&
+    !isImage &&
+    !isVideo &&
+    !isVoice &&
+    !isEmoji &&
+    !isCard &&
+    !isCall &&
+    !isType49 &&
+    message.localType === 1 &&
+    cleanedParsedContent.trim()
+  )
+  const messageInsightControl = canShowMessageInsight ? (
+    <MessageInsightControl
+      message={message}
+      messageKey={messageKey}
+      session={session}
+      displayName={session.displayName || session.username}
+      avatarUrl={avatarUrl}
+      senderName={resolvedSenderName || session.displayName || session.username}
+      targetText={cleanedParsedContent}
+      contextCount={aiMessageInsightContextCount || 50}
+    />
+  ) : null
 
   // 是否有引用消息
   const hasQuote = quotedContent.length > 0
@@ -11051,6 +11432,7 @@ function MessageBubble({
       isSelected={isSelected}
       onContextMenu={onContextMenu}
       onToggleSelection={onToggleSelection}
+      actionNode={messageInsightControl}
       portal={systemAlertPortal}
     >
       {renderContent()}
@@ -11073,6 +11455,8 @@ const MemoMessageBubble = React.memo(MessageBubble, (prevProps, nextProps) => {
   if (prevProps.onContextMenu !== nextProps.onContextMenu) return false
   if (prevProps.onJumpToQuotedMessage !== nextProps.onJumpToQuotedMessage) return false
   if (prevProps.onToggleSelection !== nextProps.onToggleSelection) return false
+  if (prevProps.aiMessageInsightEnabled !== nextProps.aiMessageInsightEnabled) return false
+  if (prevProps.aiMessageInsightContextCount !== nextProps.aiMessageInsightContextCount) return false
 
   return (
     prevProps.session.username === nextProps.session.username &&
