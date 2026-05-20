@@ -402,7 +402,7 @@ export interface ElectronAPI {
       }
       error?: string
     }>
-    getSessionMessageCounts: (sessionIds: string[]) => Promise<{
+    getSessionMessageCounts: (sessionIds: string[], options?: { preferHintCache?: boolean; bypassSessionCache?: boolean }) => Promise<{
       success: boolean
       counts?: Record<string, number>
       error?: string
