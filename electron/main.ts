@@ -439,6 +439,7 @@ const pruneChatHistoryPayloadStore = (): void => {
 }
 
 type WindowCloseBehavior = 'ask' | 'tray' | 'quit'
+type CloseRestoreMethod = 'tray' | 'dock'
 
 // 更新下载状态管理（Issue #294 修复）
 let isDownloadInProgress = false
@@ -812,29 +813,47 @@ const isSilentStartupEnabled = (): boolean => {
   return configService?.get('silentStartup') === true
 }
 
+const getCloseRestoreMethod = (): CloseRestoreMethod | null => {
+  if (tray) return 'tray'
+  if (process.platform === 'darwin') return 'dock'
+  return null
+}
+
+const canKeepMainWindowInBackground = (): boolean => {
+  return getCloseRestoreMethod() !== null
+}
+
+const getPlatformIconName = (): string => {
+  if (process.platform === 'linux') return 'icon.png'
+  if (process.platform === 'darwin') return 'icon.icns'
+  return 'icon.ico'
+}
+
+const resolveAppIconPath = (): string => {
+  const iconName = getPlatformIconName()
+  if (!process.env.VITE_DEV_SERVER_URL) {
+    return join(process.resourcesPath, iconName)
+  }
+  if (process.platform === 'darwin') {
+    return join(__dirname, '../resources/icons/macos/icon.icns')
+  }
+  return join(__dirname, `../public/${iconName}`)
+}
+
 const requestMainWindowCloseConfirmation = (win: BrowserWindow): void => {
   if (isClosePromptVisible) return
   isClosePromptVisible = true
+  const restoreMethod = getCloseRestoreMethod()
   win.webContents.send('window:confirmCloseRequested', {
-    canMinimizeToTray: Boolean(tray)
+    canMinimizeToTray: restoreMethod !== null,
+    restoreMethod: restoreMethod ?? undefined
   })
 }
 
 function createWindow(options: { autoShow?: boolean } = {}) {
   // 获取图标路径 - 打包后在 resources 目录
   const { autoShow = true } = options
-  let iconName = 'icon.ico';
-  if (process.platform === 'linux') {
-    iconName = 'icon.png';
-  } else if (process.platform === 'darwin') {
-    iconName = 'icon.icns';
-  }
-
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-
-  const iconPath = isDev
-      ? join(__dirname, `../public/${iconName}`)
-      : join(process.resourcesPath, iconName);
+  const iconPath = resolveAppIconPath()
 
   const win = new BrowserWindow({
     width: 1400,
@@ -907,7 +926,7 @@ function createWindow(options: { autoShow?: boolean } = {}) {
       return
     }
 
-    if (closeBehavior === 'tray' && tray) {
+    if (closeBehavior === 'tray' && canKeepMainWindowInBackground()) {
       win.hide()
       return
     }
@@ -2167,7 +2186,7 @@ function registerIpcHandlers() {
 
     try {
       if (action === 'tray') {
-        if (tray) {
+        if (canKeepMainWindowInBackground()) {
           mainWindow.hide()
           return true
         }
@@ -4313,18 +4332,7 @@ app.whenReady().then(async () => {
   ensureWeChatRequestHeaderInterceptor()
   mainWindow = createWindow({ autoShow: false })
 
-  let iconName = 'icon.ico';
-  if (process.platform === 'linux') {
-    iconName = 'icon.png';
-  } else if (process.platform === 'darwin') {
-    iconName = 'icon.icns';
-  }
-
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-
-  const resolvedTrayIcon = isDev
-      ? join(__dirname, `../public/${iconName}`)
-      : join(process.resourcesPath, iconName);
+  const resolvedTrayIcon = resolveAppIconPath()
 
 
   try {
@@ -4402,6 +4410,14 @@ app.whenReady().then(async () => {
   await httpService.autoStart()
 
   app.on('activate', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) {
+        mainWindow.show()
+      }
+      mainWindow.focus()
+      return
+    }
+
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow()
     }
@@ -4447,4 +4463,3 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
-
