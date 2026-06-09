@@ -319,6 +319,8 @@ jobs:
           LINUX_APPIMAGE_URL="$(build_link "$LINUX_APPIMAGE_ASSET")"
 
           cat > release_notes.md <<EOF
+          **非官方构建**
+          
           ## 更新日志
           修复了一些已知问题
 
