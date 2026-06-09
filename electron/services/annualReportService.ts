@@ -1,6 +1,7 @@
 import { parentPort } from 'worker_threads'
 import { wcdbService } from './wcdbService'
 import { resolveAccountDir } from './accountDirResolver'
+import { MSG_TYPE } from '../../shared/messageTypes'
 
 export interface TopContact {
   username: string
@@ -1090,7 +1091,7 @@ class AnnualReportService {
                 lastMessageTime.set(sessionId, { time: createTime, isSent })
 
                 // 常用语
-                if ((localType === 1 || localType === 244813135921) && isSent) {
+                if ((localType === MSG_TYPE.TEXT || localType === MSG_TYPE.QUOTE_TEXT) && isSent) {
                   const content = this.decodeMessageContent(row.message_content, row.compress_content)
                   const text = String(content).trim()
                   if (text.length >= 2 && text.length <= 20 &&

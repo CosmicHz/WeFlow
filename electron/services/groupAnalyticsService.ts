@@ -6,6 +6,7 @@ import { wcdbService } from './wcdbService'
 import { chatService } from './chatService'
 import type { Message } from './chatService'
 import type { ChatStatistics } from './analyticsService'
+import { MSG_TYPE, CONTACT_TYPE } from '../../shared/messageTypes'
 
 export interface GroupChatInfo {
   username: string
@@ -692,7 +693,7 @@ class GroupAnalyticsService {
     if (normalizedWxid.includes('@chatroom') || normalizedWxid.startsWith('gh_')) return false
     if (this.friendExcludeNames.has(normalizedWxid)) return false
     if (!contact) return false
-    return contact.localType === 1
+    return contact.localType === CONTACT_TYPE.FRIEND
   }
 
   private sortGroupMembersPanelEntries(members: GroupMembersPanelEntry[]): GroupMembersPanelEntry[] {
@@ -1606,7 +1607,7 @@ class GroupAnalyticsService {
                 }
               }
             }
-            else if (msgType === 3) stats.imageMessages++
+            else if (msgType === MSG_TYPE.IMAGE) stats.imageMessages++
             else if (msgType === 34) stats.voiceMessages++
             else if (msgType === 43) stats.videoMessages++
             else if (msgType === 47) stats.emojiMessages++

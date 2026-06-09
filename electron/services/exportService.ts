@@ -1,4 +1,4 @@
-﻿import * as fs from 'fs'
+﻿﻿﻿﻿﻿﻿﻿import * as fs from 'fs'
 import * as path from 'path'
 import * as http from 'http'
 import * as https from 'https'
@@ -15,6 +15,7 @@ import { voiceTranscribeService } from './voiceTranscribeService'
 import { exportRecordService } from './exportRecordService'
 import { EXPORT_HTML_STYLES } from './exportHtmlStyles'
 import { LRUCache } from '../utils/LRUCache.js'
+import { MSG_TYPE, XML_TYPE, DATATYPE, CONTACT_TYPE, isFileAppLocalType as isFileAppLocalTypeShared, isSystemMessage as isSystemMessageType, resolveResourceType as resolveResourceTypeShared, getWeCloneTypeName as getWeCloneTypeNameShared, getMessageTypeLabel, FILE_APP_LOCAL_TYPES, FILE_APP_LOCAL_TYPE_SET, MESSAGE_TYPE_BRACKET_LABELS } from '../../shared/messageTypes'
 
 // ChatLab 格式类型定义
 interface ChatLabHeader {
@@ -74,24 +75,20 @@ interface ChatLabExport {
 
 // 消息类型映射：微信 localType -> ChatLab type
 const MESSAGE_TYPE_MAP: Record<number, number> = {
-  1: 0,      // 文本 -> TEXT
-  3: 1,      // 图片 -> IMAGE
-  34: 2,     // 语音 -> VOICE
-  43: 3,     // 视频 -> VIDEO
-  49: 7,     // 链接/文件 -> LINK (需要进一步判断)
-  34359738417: 7,  // 文件消息变体 -> LINK
-  103079215153: 7, // 文件消息变体 -> LINK
-  25769803825: 7,  // 文件消息变体 -> LINK
-  47: 5,     // 表情包 -> EMOJI
-  48: 8,     // 位置 -> LOCATION
-  42: 27,    // 名片 -> CONTACT
-  50: 23,    // 通话 -> CALL
-  10000: 80, // 系统消息 -> SYSTEM
+  [MSG_TYPE.TEXT]: 0,      // 文本 -> TEXT
+  [MSG_TYPE.IMAGE]: 1,      // 图片 -> IMAGE
+  [MSG_TYPE.VOICE]: 2,     // 语音 -> VOICE
+  [MSG_TYPE.VIDEO]: 3,     // 视频 -> VIDEO
+  [MSG_TYPE.APP_MESSAGE]: 7,     // 链接/文件 -> LINK (需要进一步判断)
+  [MSG_TYPE.FILE_V1]: 7,  // 文件消息变体 -> LINK
+  [MSG_TYPE.FILE_V2]: 7, // 文件消息变体 -> LINK
+  [MSG_TYPE.FILE_V3]: 7,  // 文件消息变体 -> LINK
+  [MSG_TYPE.EMOJI]: 5,     // 表情包 -> EMOJI
+  [MSG_TYPE.LOCATION]: 8,     // 位置 -> LOCATION
+  [MSG_TYPE.CARD]: 27,    // 名片 -> CONTACT
+  [MSG_TYPE.CALL]: 23,    // 通话 -> CALL
+  [MSG_TYPE.SYSTEM]: 80, // 系统消息 -> SYSTEM
 }
-
-// 与 chatService 的资源消息识别保持一致，覆盖桌面微信里的多种文件消息 localType。
-const FILE_APP_LOCAL_TYPES = [49, 34359738417, 103079215153, 25769803825] as const
-const FILE_APP_LOCAL_TYPE_SET = new Set<number>(FILE_APP_LOCAL_TYPES)
 
 export interface ExportOptions {
   format: 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql'
@@ -1119,26 +1116,22 @@ class ExportService {
 
   private getTargetMediaLocalTypes(options: ExportOptions): Set<number> {
     const mediaContentType = this.getMediaContentType(options)
-    if (mediaContentType === 'voice') return new Set([34])
-    if (mediaContentType === 'image') return new Set([3])
-    if (mediaContentType === 'video') return new Set([43])
-    if (mediaContentType === 'emoji') return new Set([47])
+    if (mediaContentType === 'voice') return new Set([MSG_TYPE.VOICE])
+    if (mediaContentType === 'image') return new Set([MSG_TYPE.IMAGE])
+    if (mediaContentType === 'video') return new Set([MSG_TYPE.VIDEO])
+    if (mediaContentType === 'emoji') return new Set([MSG_TYPE.EMOJI])
     if (mediaContentType === 'file') return new Set(FILE_APP_LOCAL_TYPES)
 
     const selected = new Set<number>()
-    if (options.exportImages) selected.add(3)
-    if (options.exportVoices) selected.add(34)
-    if (options.exportVideos) selected.add(43)
+    if (options.exportImages) selected.add(MSG_TYPE.IMAGE)
+    if (options.exportVoices) selected.add(MSG_TYPE.VOICE)
+    if (options.exportVideos) selected.add(MSG_TYPE.VIDEO)
     if (options.exportFiles) {
       for (const fileType of FILE_APP_LOCAL_TYPES) {
         selected.add(fileType)
       }
     }
     return selected
-  }
-
-  private isFileAppLocalType(localType: number): boolean {
-    return FILE_APP_LOCAL_TYPE_SET.has(localType)
   }
 
   private isFileOnlyMediaFilter(targetMediaTypes: Set<number> | null): boolean {
@@ -1168,7 +1161,7 @@ class ExportService {
 
   private hasFileAppMessageHints(message: Record<string, any> | null | undefined): boolean {
     const hints = this.getFileAppMessageHints(message)
-    if (hints.xmlType) return hints.xmlType === '6'
+    if (hints.xmlType) return hints.xmlType === String(XML_TYPE.FILE)
     return Boolean(hints.fileName || hints.fileExt || hints.fileMd5 || hints.fileSize)
   }
 
@@ -1187,7 +1180,7 @@ class ExportService {
     file_md5?: unknown
   }): boolean {
     const { xmlType, fileName, fileExt, fileMd5, fileSize } = this.getFileAppMessageHints(msg as Record<string, any>)
-    if (xmlType) return xmlType === '6'
+    if (xmlType) return xmlType === String(XML_TYPE.FILE)
     if (fileName || fileExt || fileMd5 || fileSize) return true
 
     const normalized = this.normalizeAppMessageContent(String(msg?.content || ''))
@@ -1405,7 +1398,7 @@ class ExportService {
 
   private shouldDecodeMessageContentInFastMode(localType: number): boolean {
     // 这些类型在文本导出里只需要占位符，无需解码完整 XML / 压缩内容
-    if (localType === 3 || localType === 34 || localType === 42 || localType === 43) {
+    if (localType === MSG_TYPE.IMAGE || localType === MSG_TYPE.VOICE || localType === MSG_TYPE.CARD || localType === MSG_TYPE.VIDEO) {
       return false
     }
     return true
@@ -1419,9 +1412,9 @@ class ExportService {
     const allowFileProbe = options?.allowFileProbe === true
     if (!targetMediaTypes || (!targetMediaTypes.has(localType) && !allowFileProbe)) return false
     // 语音导出仅需要 localId 读取音频数据，不依赖 XML 内容
-    if (localType === 34) return false
+    if (localType === MSG_TYPE.VOICE) return false
     // 图片/视频/表情/文件可能需要从 XML 提取 md5/datName/附件信息
-    if (localType === 3 || localType === 43 || localType === 47 || this.isFileAppLocalType(localType) || allowFileProbe) return true
+    if (localType === MSG_TYPE.IMAGE || localType === MSG_TYPE.VIDEO || localType === MSG_TYPE.EMOJI || isFileAppLocalTypeShared(localType) || allowFileProbe) return true
     return false
   }
 
@@ -1820,7 +1813,7 @@ class ExportService {
       if ((scanIndex++ & 0x7f) === 0) {
         this.throwIfStopRequested(control)
       }
-      if (Number(msg?.localType) !== 47) continue
+      if (Number(msg?.localType) !== MSG_TYPE.EMOJI) continue
 
       const content = String(msg?.content || '')
       const normalizedMd5 = this.normalizeEmojiMd5(msg?.emojiMd5)
@@ -1877,7 +1870,7 @@ class ExportService {
       if ((assignIndex++ & 0x7f) === 0) {
         this.throwIfStopRequested(control)
       }
-      if (Number(msg?.localType) !== 47) continue
+      if (Number(msg?.localType) !== MSG_TYPE.EMOJI) continue
       const md5 = this.normalizeEmojiMd5(msg?.emojiMd5)
       if (!md5) {
         msg.emojiCaption = undefined
@@ -1932,7 +1925,7 @@ class ExportService {
     const localType = Number.parseInt(String(rawLocalType ?? ''), 10)
     const quanPin = String(contact?.quan_pin ?? contact?.quanPin ?? contact?.WCDB_CT_quan_pin ?? '').trim()
 
-    if (Number.isFinite(localType) && localType === 0 && quanPin) {
+    if (Number.isFinite(localType) && localType === CONTACT_TYPE.NOT_FRIEND && quanPin) {
       return '曾经的好友_'
     }
 
@@ -2194,20 +2187,20 @@ class ExportService {
 
     const xmlTypeRaw = this.extractAppMessageType(normalized)
     const xmlType = xmlTypeRaw ? Number.parseInt(xmlTypeRaw, 10) : null
-    const looksLikeAppMessage = localType === 49 || normalized.includes('<appmsg') || normalized.includes('<msg>')
+    const looksLikeAppMessage = localType === MSG_TYPE.APP_MESSAGE || normalized.includes('<appmsg') || normalized.includes('<msg>')
 
     // 特殊处理 type 49 或 XML type
     if (looksLikeAppMessage || xmlType) {
       const subType = xmlType || 0
       switch (subType) {
-        case 6: return 4   // 文件 -> FILE
-        case 19: return 7  // 聊天记录 -> LINK (ChatLab 没有专门的聊天记录类型)
-        case 33:
-        case 36: return 24 // 小程序 -> SHARE
-        case 57: return 25 // 引用回复 -> REPLY
-        case 2000: return 99 // 转账 -> OTHER (ChatLab 没有转账类型)
-        case 5:
-        case 49: return 7  // 链接 -> LINK
+        case XML_TYPE.FILE: return 4   // 文件 -> FILE
+        case XML_TYPE.CHAT_RECORD: return 7  // 聊天记录 -> LINK (ChatLab 没有专门的聊天记录类型)
+        case XML_TYPE.MINI_PROGRAM_V1:
+        case XML_TYPE.MINI_PROGRAM_V2: return 24 // 小程序 -> SHARE
+        case XML_TYPE.QUOTE: return 25 // 引用回复 -> REPLY
+        case XML_TYPE.TRANSFER: return 99 // 转账 -> OTHER (ChatLab 没有转账类型)
+        case XML_TYPE.LINK:
+        case XML_TYPE.LINK_V2: return 7  // 链接 -> LINK
         default:
           if (xmlType || looksLikeAppMessage) return 7 // 有 appmsg 但未知，默认为链接
       }
@@ -2216,7 +2209,8 @@ class ExportService {
   }
 
   private isReadableSystemMessage(localType: number, content: string): boolean {
-    if (localType === 10000) return true
+    // if (isSystemMessageType(localType)) return true
+    if (localType === MSG_TYPE.SYSTEM) return true
     const normalized = this.normalizeAppMessageContent(content || '')
     return /<sysmsg\b/i.test(this.stripSenderPrefix(normalized))
   }
@@ -2504,7 +2498,7 @@ class ExportService {
     isSend?: boolean,
     emojiCaption?: string
   ): string | null {
-    if (!content && localType === 47) {
+    if (!content && localType === MSG_TYPE.EMOJI) {
       return this.formatEmojiSemanticText(emojiCaption)
     }
     if (!content) return null
@@ -2513,10 +2507,10 @@ class ExportService {
     const xmlType = this.extractAppMessageType(normalizedContent)
 
     switch (localType) {
-      case 1: // 文本
+      case MSG_TYPE.TEXT: // 文本
         return this.stripSenderPrefix(content)
-      case 3: return '[图片]'
-      case 34: {
+      case MSG_TYPE.IMAGE: return '[图片]'
+      case MSG_TYPE.VOICE: {
         // 语音消息 - 尝试获取转写文字
         const transcriptGetter = (voiceTranscribeService as unknown as {
           getCachedTranscript?: (sessionId: string, createTime: number) => string | null | undefined
@@ -2530,10 +2524,10 @@ class ExportService {
         }
         return '[语音消息]'  // 占位符，导出时会替换为转文字结果
       }
-      case 42: return '[名片]'
-      case 43: return '[视频]'
-      case 47: return this.formatEmojiSemanticText(emojiCaption)
-      case 48: {
+      case MSG_TYPE.CARD: return '[名片]'
+      case MSG_TYPE.VIDEO: return '[视频]'
+      case MSG_TYPE.EMOJI: return this.formatEmojiSemanticText(emojiCaption)
+      case MSG_TYPE.LOCATION: {
         const normalized48 = this.normalizeAppMessageContent(content)
         const locPoiname = this.extractXmlAttribute(normalized48, 'location', 'poiname') || this.extractXmlValue(normalized48, 'poiname') || this.extractXmlValue(normalized48, 'poiName')
         const locLabel = this.extractXmlAttribute(normalized48, 'location', 'label') || this.extractXmlValue(normalized48, 'label')
@@ -2545,7 +2539,7 @@ class ExportService {
         if (locLat && locLng) locParts.push(`(${locLat},${locLng})`)
         return locParts.length > 0 ? `[位置] ${locParts.join(' ')}` : '[位置]'
       }
-      case 49: {
+      case MSG_TYPE.APP_MESSAGE: {
         const title = this.extractXmlValue(normalizedContent, 'title')
         const type = this.extractAppMessageType(normalizedContent)
         const songName = this.extractXmlValue(normalizedContent, 'songname')
@@ -2575,10 +2569,10 @@ class ExportService {
         if (type === '5' || type === '49') return title ? `[链接] ${title}` : '[链接]'
         return title ? `[链接] ${title}` : '[链接]'
       }
-      case 50: return this.parseVoipMessage(content)
-      case 10000: return this.cleanSystemMessage(content)
-      case 266287972401: return this.cleanSystemMessage(content)  // 拍一拍
-      case 244813135921: {
+      case MSG_TYPE.CALL: return this.parseVoipMessage(content)
+      case MSG_TYPE.SYSTEM: return this.cleanSystemMessage(content)
+      case MSG_TYPE.PAT: return this.cleanSystemMessage(content)  // 拍一拍
+      case MSG_TYPE.QUOTE_TEXT: {
         // 引用消息
         const quoteDisplay = this.extractQuotedReplyDisplay(content)
         if (quoteDisplay) {
@@ -2593,7 +2587,7 @@ class ExportService {
           const title = this.extractXmlValue(content, 'title')
 
           // 群公告消息（type 87）
-          if (xmlType === '87') {
+          if (xmlType === String(XML_TYPE.VOIP)) {
             const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
             if (textAnnouncement) {
               return `[群公告] ${textAnnouncement}`
@@ -2602,7 +2596,7 @@ class ExportService {
           }
 
           // 转账消息
-          if (xmlType === '2000') {
+          if (xmlType === String(XML_TYPE.TRANSFER)) {
             const feedesc = this.extractXmlValue(content, 'feedesc')
             const payMemo = this.extractXmlValue(content, 'pay_memo')
             const transferPrefix = this.getTransferPrefix(content, myWxid, senderWxid, isSend)
@@ -2613,19 +2607,19 @@ class ExportService {
           }
 
           // 其他类型
-          if (xmlType === '3') return title ? `[音乐] ${title}` : '[音乐]'
-          if (xmlType === '6') return title ? `[文件] ${title}` : '[文件]'
-          if (xmlType === '19') return this.formatForwardChatRecordContent(normalizedContent)
-          if (xmlType === '33' || xmlType === '36') return title ? `[小程序] ${title}` : '[小程序]'
-          if (xmlType === '57') {
+          if (xmlType === String(XML_TYPE.MUSIC)) return title ? `[音乐] ${title}` : '[音乐]'
+          if (xmlType === String(XML_TYPE.FILE)) return title ? `[文件] ${title}` : '[文件]'
+          if (xmlType === String(XML_TYPE.CHAT_RECORD)) return this.formatForwardChatRecordContent(normalizedContent)
+          if (xmlType === String(XML_TYPE.MINI_PROGRAM_V1) || xmlType === String(XML_TYPE.MINI_PROGRAM_V2)) return title ? `[小程序] ${title}` : '[小程序]'
+          if (xmlType === String(XML_TYPE.QUOTE)) {
             const quoteDisplay = this.extractQuotedReplyDisplay(content)
             if (quoteDisplay) {
               return this.buildQuotedReplyText(quoteDisplay)
             }
             return title || '[引用消息]'
           }
-          if (xmlType === '53') return title ? `[接龙] ${title.split(/\r?\n/).map(line => line.trim()).find(Boolean) || title}` : '[接龙]'
-          if (xmlType === '5' || xmlType === '49') return title ? `[链接] ${title}` : '[链接]'
+          if (xmlType === String(XML_TYPE.SOLITAIRE)) return title ? `[接龙] ${title.split(/\r?\n/).map(line => line.trim()).find(Boolean) || title}` : '[接龙]'
+          if (xmlType === String(XML_TYPE.LINK) || xmlType === String(XML_TYPE.LINK_V2)) return title ? `[链接] ${title}` : '[链接]'
 
           // 有 title 就返回 title
           if (title) return title
@@ -2652,15 +2646,15 @@ class ExportService {
       return readableSystemText
     }
 
-    if (localType === 3) return '[图片]'
-    if (localType === 1) return this.stripSenderPrefix(safeContent)
-    if (localType === 34) {
+    if (localType === MSG_TYPE.IMAGE) return '[图片]'
+    if (localType === MSG_TYPE.TEXT) return this.stripSenderPrefix(safeContent)
+    if (localType === MSG_TYPE.VOICE) {
       if (options.exportVoiceAsText) {
         return voiceTranscript || '[语音消息 - 转文字失败]'
       }
       return '[其他消息]'
     }
-    if (localType === 42) {
+    if (localType === MSG_TYPE.CARD) {
       const normalized = this.normalizeAppMessageContent(safeContent)
       const nickname =
         this.extractXmlValue(normalized, 'nickname') ||
@@ -2668,7 +2662,7 @@ class ExportService {
         this.extractXmlValue(normalized, 'name')
       return nickname ? `[名片]${nickname}` : '[名片]'
     }
-    if (localType === 43) {
+    if (localType === MSG_TYPE.VIDEO) {
       const normalized = this.normalizeAppMessageContent(safeContent)
       const lengthValue =
         this.extractXmlValue(normalized, 'playlength') ||
@@ -2678,10 +2672,10 @@ class ExportService {
       const seconds = lengthValue ? this.parseDurationSeconds(lengthValue) : null
       return seconds ? `[视频]${seconds}s` : '[视频]'
     }
-    if (localType === 47) {
+    if (localType === MSG_TYPE.EMOJI) {
       return this.formatEmojiSemanticText(emojiCaption)
     }
-    if (localType === 48) {
+    if (localType === MSG_TYPE.LOCATION) {
       const normalized = this.normalizeAppMessageContent(safeContent)
       const locPoiname = this.extractXmlAttribute(normalized, 'location', 'poiname') || this.extractXmlValue(normalized, 'poiname') || this.extractXmlValue(normalized, 'poiName')
       const locLabel = this.extractXmlAttribute(normalized, 'location', 'label') || this.extractXmlValue(normalized, 'label')
@@ -2693,16 +2687,16 @@ class ExportService {
       if (locLat && locLng) locParts.push(`(${locLat},${locLng})`)
       return locParts.length > 0 ? `[位置] ${locParts.join(' ')}` : '[位置]'
     }
-    if (localType === 50) {
+    if (localType === MSG_TYPE.CALL) {
       return this.parseVoipMessage(safeContent)
     }
-    if (localType === 10000 || localType === 266287972401) {
+    if (isSystemMessageType(localType)) {
       return this.cleanSystemMessage(safeContent)
     }
 
     const normalized = this.normalizeAppMessageContent(safeContent)
     const isAppMessage = normalized.includes('<appmsg') || normalized.includes('<msg>')
-    if (localType === 49 || isAppMessage) {
+    if (localType === MSG_TYPE.APP_MESSAGE || isAppMessage) {
       const subTypeRaw = this.extractAppMessageType(normalized)
       const subType = subTypeRaw ? parseInt(subTypeRaw, 10) : 0
       const title = this.extractXmlValue(normalized, 'title') || this.extractXmlValue(normalized, 'appname')
@@ -2864,9 +2858,9 @@ class ExportService {
   }
 
   private isQuotedReplyMessage(localType: number, content: string): boolean {
-    if (localType === 244813135921) return true
+    if (localType === MSG_TYPE.QUOTE_TEXT) return true
     const normalized = this.normalizeAppMessageContent(content || '')
-    if (!(localType === 49 || normalized.includes('<appmsg') || normalized.includes('<msg>'))) {
+    if (!(localType === MSG_TYPE.APP_MESSAGE || normalized.includes('<appmsg') || normalized.includes('<msg>'))) {
       return false
     }
     const subType = this.extractAppMessageType(normalized)
@@ -2945,19 +2939,15 @@ class ExportService {
   }
 
   private getWeCloneTypeName(localType: number, content: string): string {
-    if (localType === 1) return 'text'
-    if (localType === 3) return 'image'
-    if (localType === 47) return 'sticker'
-    if (localType === 43) return 'video'
-    if (localType === 34) return 'voice'
-    if (localType === 48) return 'location'
+    const baseType = getWeCloneTypeNameShared(localType)
+    if (baseType !== 'text' || localType !== MSG_TYPE.APP_MESSAGE) return baseType
+    // 额外检查：content 中包含 appmsg 标签的也按 app message 处理
     const normalized = this.normalizeAppMessageContent(content || '')
     const xmlType = this.extractAppMessageType(normalized)
-    if (localType === 49 || normalized.includes('<appmsg') || normalized.includes('<msg>')) {
-      if (xmlType === '6') return 'file'
-      return 'text'
+    if (normalized.includes('<appmsg') || normalized.includes('<msg>')) {
+      if (xmlType === String(XML_TYPE.FILE)) return 'file'
     }
-    return 'text'
+    return baseType
   }
 
   private getWeCloneSource(msg: any, typeName: string, mediaItem: MediaExportItem | null): string {
@@ -3196,17 +3186,17 @@ class ExportService {
     }
 
     const typeNames: Record<number, string> = {
-      1: '文本消息',
-      3: '图片消息',
-      34: '语音消息',
-      42: '名片消息',
-      43: '视频消息',
-      47: '动画表情',
-      48: '位置消息',
-      49: '链接消息',
-      50: '通话消息',
-      10000: '系统消息',
-      244813135921: '引用消息'
+      [MSG_TYPE.TEXT]: '文本消息',
+      [MSG_TYPE.IMAGE]: '图片消息',
+      [MSG_TYPE.VOICE]: '语音消息',
+      [MSG_TYPE.CARD]: '名片消息',
+      [MSG_TYPE.VIDEO]: '视频消息',
+      [MSG_TYPE.EMOJI]: '动画表情',
+      [MSG_TYPE.LOCATION]: '位置消息',
+      [MSG_TYPE.APP_MESSAGE]: '链接消息',
+      [MSG_TYPE.CALL]: '通话消息',
+      [MSG_TYPE.SYSTEM]: '系统消息',
+      [MSG_TYPE.QUOTE_TEXT]: '引用消息'
     }
     return typeNames[localType] || '其他消息'
   }
@@ -3433,13 +3423,13 @@ class ExportService {
     if (desc) return desc
     if (title) return title
     switch (item.datatype) {
-      case 3: return '[图片]'
-      case 34: return '[语音消息]'
-      case 43: return '[视频]'
-      case 47: return '[表情包]'
-      case 49:
-      case 8: return title ? `[文件] ${title}` : '[文件]'
-      case 17: return item.chatRecordDesc || title || '[聊天记录]'
+      case DATATYPE.IMAGE: return '[图片]'
+      case DATATYPE.VOICE: return '[语音消息]'
+      case DATATYPE.VIDEO: return '[视频]'
+      case DATATYPE.EMOJI: return '[表情包]'
+      case DATATYPE.APP_MESSAGE:
+      case DATATYPE.FILE: return title ? `[文件] ${title}` : '[文件]'
+      case DATATYPE.CHAT_RECORD: return item.chatRecordDesc || title || '[聊天记录]'
       default: return '[消息]'
     }
   }
@@ -3569,17 +3559,17 @@ class ExportService {
         const rawCompressContent = result.value.row.compress_content
         const content = chatService['decodeMessageContent'](rawMessageContent, rawCompressContent)
 
-        if (localType === 1) {
+        if (localType === MSG_TYPE.TEXT) {
           msg.quotedContent = chatService['sanitizeQuotedContent'](content)
-        } else if (localType === 3) {
+        } else if (localType === MSG_TYPE.IMAGE) {
           msg.quotedContent = '[图片]'
-        } else if (localType === 34) {
+        } else if (localType === MSG_TYPE.VOICE) {
           msg.quotedContent = '[语音]'
-        } else if (localType === 43) {
+        } else if (localType === MSG_TYPE.VIDEO) {
           msg.quotedContent = '[视频]'
-        } else if (localType === 47) {
+        } else if (localType === MSG_TYPE.EMOJI) {
           msg.quotedContent = '[动画表情]'
-        } else if (localType === 49) {
+        } else if (localType === MSG_TYPE.APP_MESSAGE) {
           msg.quotedContent = '[链接]'
         }
       }
@@ -3750,19 +3740,19 @@ class ExportService {
 
     const normalized = this.normalizeAppMessageContent(content)
     const looksLikeAppMsg =
-      localType === 49 ||
-      localType === 244813135921 ||
+      localType === MSG_TYPE.APP_MESSAGE ||
+      localType === MSG_TYPE.QUOTE_TEXT ||
       normalized.includes('<appmsg') ||
       normalized.includes('<msg>')
     const hasReferMsg = normalized.includes('<refermsg>')
     const xmlType = this.extractAppMessageType(normalized)
     const isFinder =
-      xmlType === '51' ||
+      xmlType === String(XML_TYPE.VIDEO_ACCOUNT) ||
       normalized.includes('<finder') ||
       normalized.includes('finderusername') ||
       normalized.includes('finderobjectid')
     const isMusic =
-      xmlType === '3' ||
+      xmlType === String(XML_TYPE.MUSIC) ||
       normalized.includes('<musicurl') ||
       normalized.includes('<playurl>') ||
       normalized.includes('<dataurl>')
@@ -3772,25 +3762,25 @@ class ExportService {
     let appMsgKind: string | undefined
     if (isFinder) {
       appMsgKind = 'finder'
-    } else if (xmlType === '2001') {
+    } else if (xmlType === String(XML_TYPE.RED_PACKET)) {
       appMsgKind = 'red-packet'
     } else if (isMusic) {
       appMsgKind = 'music'
-    } else if (xmlType === '33' || xmlType === '36') {
+    } else if (xmlType === String(XML_TYPE.MINI_PROGRAM_V1) || xmlType === String(XML_TYPE.MINI_PROGRAM_V2)) {
       appMsgKind = 'miniapp'
-    } else if (xmlType === '6') {
+    } else if (xmlType === String(XML_TYPE.FILE)) {
       appMsgKind = 'file'
-    } else if (xmlType === '19') {
+    } else if (xmlType === String(XML_TYPE.CHAT_RECORD)) {
       appMsgKind = 'chat-record'
-    } else if (xmlType === '2000') {
+    } else if (xmlType === String(XML_TYPE.TRANSFER)) {
       appMsgKind = 'transfer'
-    } else if (xmlType === '87') {
+    } else if (xmlType === String(XML_TYPE.VOIP)) {
       appMsgKind = 'announcement'
-    } else if (xmlType === '57' || hasReferMsg || localType === 244813135921) {
+    } else if (xmlType === String(XML_TYPE.QUOTE) || hasReferMsg || localType === MSG_TYPE.QUOTE_TEXT) {
       appMsgKind = 'quote'
-    } else if (xmlType === '53') {
+    } else if (xmlType === String(XML_TYPE.SOLITAIRE)) {
       appMsgKind = 'solitaire'
-    } else if (xmlType === '5' || xmlType === '49') {
+    } else if (xmlType === String(XML_TYPE.LINK) || xmlType === String(XML_TYPE.LINK_V2)) {
       appMsgKind = 'link'
     } else if (looksLikeAppMsg) {
       appMsgKind = 'card'
@@ -3927,7 +3917,7 @@ class ExportService {
   }
 
   private extractArkmeContactCardMeta(content: string, localType: number): Record<string, any> | null {
-    if (!content || localType !== 42) return null
+    if (!content || localType !== MSG_TYPE.CARD) return null
 
     const normalized = this.normalizeAppMessageContent(content)
     const readAttr = (attrName: string): string =>
@@ -4014,7 +4004,7 @@ class ExportService {
     isSend?: boolean,
     emojiCaption?: string
   ): string {
-    if (!content && localType === 47) {
+    if (!content && localType === MSG_TYPE.EMOJI) {
       return this.formatEmojiSemanticText(emojiCaption)
     }
     if (!content) return ''
@@ -4024,11 +4014,11 @@ class ExportService {
       return readableSystemText
     }
 
-    if (localType === 1) {
+    if (localType === MSG_TYPE.TEXT) {
       return this.stripSenderPrefix(content)
     }
 
-    if (localType === 34) {
+    if (localType === MSG_TYPE.VOICE) {
       return this.parseMessageContent(content, localType, undefined, undefined, myWxid, senderWxid, isSend, emojiCaption) || ''
     }
 
@@ -4039,7 +4029,7 @@ class ExportService {
     if (!content) return null
 
     const normalized = this.normalizeAppMessageContent(content)
-    const isAppMessage = localType === 49 || normalized.includes('<appmsg') || normalized.includes('<msg>')
+    const isAppMessage = localType === MSG_TYPE.APP_MESSAGE || normalized.includes('<appmsg') || normalized.includes('<msg>')
     if (!isAppMessage) return null
 
     const subType = this.extractAppMessageType(normalized)
@@ -4163,7 +4153,7 @@ class ExportService {
     const localType = msg.localType
 
     // 图片消息
-    if (localType === 3 && options.exportImages) {
+    if (localType === MSG_TYPE.IMAGE && options.exportImages) {
       const result = await this.exportImage(
         msg,
         sessionId,
@@ -4178,7 +4168,7 @@ class ExportService {
     }
 
     // 语音消息
-    if (localType === 34) {
+    if (localType === MSG_TYPE.VOICE) {
       if (options.exportVoices) {
         return this.exportVoice(msg, sessionId, mediaRootDir, mediaRelativePrefix, options.dirCache, options.control)
       }
@@ -4188,14 +4178,14 @@ class ExportService {
     }
 
     // 动画表情
-    if (localType === 47 && options.exportEmojis) {
+    if (localType === MSG_TYPE.EMOJI && options.exportEmojis) {
       const result = await this.exportEmoji(msg, sessionId, mediaRootDir, mediaRelativePrefix, options.dirCache, options.control)
       if (result) {
       }
       return result
     }
 
-    if (localType === 43 && options.exportVideos) {
+    if (localType === MSG_TYPE.VIDEO && options.exportVideos) {
       return this.exportVideo(
         msg,
         sessionId,
@@ -4412,7 +4402,7 @@ class ExportService {
         this.throwIfStopRequested(control)
       }
 
-      if (options.exportImages && msg?.localType === 3) {
+      if (options.exportImages && msg?.localType === MSG_TYPE.IMAGE) {
         const imageMd5 = String(msg?.imageMd5 || '').trim().toLowerCase()
         if (imageMd5) {
           imageMd5Set.add(imageMd5)
@@ -5251,7 +5241,7 @@ class ExportService {
     locationPoiname?: string
     locationLabel?: string
   } | null {
-    if (!content || localType !== 48) return null
+    if (!content || localType !== MSG_TYPE.LOCATION) return null
 
     const normalized = this.normalizeAppMessageContent(content)
     const rawLat = this.extractXmlAttribute(normalized, 'location', 'x') || this.extractXmlAttribute(normalized, 'location', 'latitude')
@@ -5325,10 +5315,10 @@ class ExportService {
 
     return messages.filter((msg) => {
       const localType = Number(msg?.localType || 0)
-      return (localType === 3 && options.exportImages) ||
-        (localType === 47 && options.exportEmojis) ||
-        (localType === 43 && options.exportVideos) ||
-        (localType === 34 && options.exportVoices) ||
+      return (localType === MSG_TYPE.IMAGE && options.exportImages) ||
+        (localType === MSG_TYPE.EMOJI && options.exportEmojis) ||
+        (localType === MSG_TYPE.VIDEO && options.exportVideos) ||
+        (localType === MSG_TYPE.VOICE && options.exportVoices) ||
         (options.exportFiles === true && this.isFileAppMessage(msg))
     })
   }
@@ -5578,7 +5568,7 @@ class ExportService {
 
           // 确定实际发送者
           let actualSender: string
-          if (localType === 10000 || localType === 266287972401) {
+          if (isSystemMessageType(localType)) {
             // 系统消息特殊处理
             const revokeInfo = this.extractRevokerInfo(content)
             if (revokeInfo.isRevoke) {
@@ -5640,7 +5630,7 @@ class ExportService {
           let fileExt: string | undefined
           let fileMd5: string | undefined
 
-          if (localType === 48 && content) {
+          if (localType === MSG_TYPE.LOCATION && content) {
             const locationMeta = this.extractLocationMeta(content, localType)
             if (locationMeta) {
               locationLat = locationMeta.locationLat
@@ -5650,7 +5640,7 @@ class ExportService {
             }
           }
 
-          if (localType === 47) {
+          if (localType === MSG_TYPE.EMOJI) {
             emojiCdnUrl = String(row.emoji_cdn_url || row.emojiCdnUrl || '').trim() || undefined
             emojiMd5 = this.normalizeEmojiMd5(row.emoji_md5 || row.emojiMd5) || undefined
             const packedInfoRaw = String(row.packed_info || row.packedInfo || row.PackedInfo || '')
@@ -5667,7 +5657,7 @@ class ExportService {
           if (collectMode === 'full' || collectMode === 'media-fast') {
             // 优先复用游标返回的字段，缺失时再回退到 XML 解析。
             imageMd5 = String(row.image_md5 || row.imageMd5 || '').trim() || undefined
-            imageDatName = localType === 3 ? this.extractImageDatNameFromRow(row, content) : undefined
+            imageDatName = localType === MSG_TYPE.IMAGE ? this.extractImageDatNameFromRow(row, content) : undefined
             videoMd5 = this.extractVideoFileNameFromRow(row, content)
             xmlType = rowFileHints.xmlType
             fileName = rowFileHints.fileName
@@ -5675,7 +5665,7 @@ class ExportService {
             fileSize = rowFileHints.fileSize
             fileMd5 = rowFileHints.fileMd5
 
-            if (content && (this.isFileAppLocalType(localType) || allowFileProbe || this.hasFileAppMessageHints({ xmlType, fileName, fileSize, fileExt, fileMd5 }))) {
+            if (content && (isFileAppLocalTypeShared(localType) || allowFileProbe || this.hasFileAppMessageHints({ xmlType, fileName, fileSize, fileExt, fileMd5 }))) {
               const fileMeta = this.extractFileAppMessageMeta(content)
               if (fileMeta) {
                 xmlType = fileMeta.xmlType || xmlType
@@ -5686,18 +5676,18 @@ class ExportService {
               }
             }
 
-            if (localType === 3 && content) {
+            if (localType === MSG_TYPE.IMAGE && content) {
               // 图片消息
               imageMd5 = imageMd5 || this.extractImageMd5(content)
               imageDatName = imageDatName || this.extractImageDatNameFromRow(row, content)
-            } else if (localType === 43 && content) {
+            } else if (localType === MSG_TYPE.VIDEO && content) {
               // 视频消息
               videoMd5 = videoMd5 || this.extractVideoFileNameFromRow(row, content)
-            } else if (collectMode === 'full' && content && (localType === 49 || content.includes('<appmsg') || content.includes('&lt;appmsg'))) {
+            } else if (collectMode === 'full' && content && (localType === MSG_TYPE.APP_MESSAGE || content.includes('<appmsg') || content.includes('&lt;appmsg'))) {
               // 检查是否是聊天记录消息（type=19），兼容大 localType 的 appmsg
               const normalizedContent = this.normalizeAppMessageContent(content)
               const xmlType = this.extractAppMessageType(normalizedContent)
-              if (xmlType === '19') {
+              if (xmlType === String(XML_TYPE.CHAT_RECORD)) {
                 chatRecordList = this.parseChatHistory(normalizedContent)
               }
             }
@@ -5895,14 +5885,14 @@ class ExportService {
       if (force) {
         return Number(msg?.localId || 0) > 0
       }
-      const isFileCandidate = this.isFileAppLocalType(Number(msg.localType || 0)) || (fileOnlyMediaFilter && this.hasFileAppMessageHints(msg))
+      const isFileCandidate = isFileAppLocalTypeShared(Number(msg.localType || 0)) || (fileOnlyMediaFilter && this.hasFileAppMessageHints(msg))
       if (isFileCandidate) {
         return !msg.xmlType || !msg.fileName || !msg.fileMd5 || !msg.fileSize || !msg.fileExt
       }
       if (!targetMediaTypes.has(msg.localType)) return false
-      if (msg.localType === 3) return !msg.imageMd5 || !msg.imageDatName
-      if (msg.localType === 47) return !msg.emojiMd5
-      if (msg.localType === 43) return !msg.videoMd5
+      if (msg.localType === MSG_TYPE.IMAGE) return !msg.imageMd5 || !msg.imageDatName
+      if (msg.localType === MSG_TYPE.EMOJI) return !msg.emojiMd5
+      if (msg.localType === MSG_TYPE.VIDEO) return !msg.videoMd5
       return false
     })
     if (needsBackfill.length === 0) return
@@ -5929,7 +5919,7 @@ class ExportService {
         const reserved0Raw = this.getRowField(row, ['reserved0', 'Reserved0', 'WCDB_CT_Reserved0']) ?? ''
         const supplementalPayload = `${this.decodeMaybeCompressed(String(packedInfoRaw || ''))}\n${this.decodeMaybeCompressed(String(reserved0Raw || ''))}`
 
-        if (msg.localType === 3) {
+        if (msg.localType === MSG_TYPE.IMAGE) {
           const imageMd5 = (String(row.image_md5 || row.imageMd5 || '').trim() || this.extractImageMd5(content) || '').toLowerCase()
           const imageDatName = this.extractImageDatNameFromRow(row, content) || ''
           if (imageMd5) msg.imageMd5 = imageMd5
@@ -5937,7 +5927,7 @@ class ExportService {
           return
         }
 
-        if (msg.localType === 47) {
+        if (msg.localType === MSG_TYPE.EMOJI) {
           const emojiMd5 =
             this.normalizeEmojiMd5(row.emoji_md5 || row.emojiMd5) ||
             this.extractEmojiMd5(content) ||
@@ -5952,13 +5942,13 @@ class ExportService {
           return
         }
 
-        if (msg.localType === 43) {
+        if (msg.localType === MSG_TYPE.VIDEO) {
           const videoMd5 = String(this.extractVideoFileNameFromRow(row, content) || '').trim().toLowerCase()
           if (videoMd5) msg.videoMd5 = videoMd5
           return
         }
 
-        if (this.isFileAppLocalType(Number(msg.localType || 0)) || this.hasFileAppMessageHints(msg)) {
+        if (isFileAppLocalTypeShared(Number(msg.localType || 0)) || this.hasFileAppMessageHints(msg)) {
           const rowFileHints = this.getFileAppMessageHints(row)
           const fileMeta = this.extractFileAppMessageMeta(content)
           const mergedFileMeta = {
@@ -6447,7 +6437,7 @@ class ExportService {
       await this.hydrateEmojiCaptionsForMessages(sessionId, allMessages, control)
 
       const voiceMessages = options.exportVoiceAsText
-        ? allMessages.filter(msg => msg.localType === 34)
+        ? allMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
 
       if (options.exportVoiceAsText && voiceMessages.length > 0) {
@@ -6510,7 +6500,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -6656,10 +6646,10 @@ class ExportService {
         let content: string | null
         const mediaKey = this.getMediaCacheKey(msg)
         const mediaItem = mediaCache.get(mediaKey)
-        if (msg.localType === 34 && options.exportVoiceAsText) {
+        if (msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText) {
           // 使用预先转写的文字
           content = voiceTranscriptMap.get(this.getStableMessageKey(msg)) || '[语音消息 - 转文字失败]'
-        } else if (mediaItem && msg.localType !== 47) {
+        } else if (mediaItem && msg.localType !== MSG_TYPE.EMOJI) {
           content = mediaItem.relativePath
         } else {
           content = this.parseMessageContent(
@@ -6748,27 +6738,27 @@ class ExportService {
             let recordContent = record.datadesc || record.datatitle || ''
 
             switch (record.datatype) {
-              case 1:
+              case MSG_TYPE.TEXT:
                 recordType = 0 // TEXT
                 break
-              case 3:
+              case MSG_TYPE.IMAGE:
                 recordType = 1 // IMAGE
                 recordContent = '[图片]'
                 break
               case 8:
-              case 49:
+              case MSG_TYPE.APP_MESSAGE:
                 recordType = 4 // FILE
                 recordContent = record.datatitle ? `[文件] ${record.datatitle}` : '[文件]'
                 break
-              case 34:
+              case MSG_TYPE.VOICE:
                 recordType = 2 // VOICE
                 recordContent = '[语音消息]'
                 break
-              case 43:
+              case MSG_TYPE.VIDEO:
                 recordType = 3 // VIDEO
                 recordContent = '[视频]'
                 break
-              case 47:
+              case MSG_TYPE.EMOJI:
                 recordType = 5 // EMOJI
                 recordContent = '[表情包]'
                 break
@@ -6991,7 +6981,7 @@ class ExportService {
       await this.resolveQuotedMessagesForExport(collected.rows, sessionId)
 
       const voiceMessages = options.exportVoiceAsText
-        ? collected.rows.filter(msg => msg.localType === 34)
+        ? collected.rows.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
 
       if (options.exportVoiceAsText && voiceMessages.length > 0) {
@@ -7027,7 +7017,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -7164,9 +7154,9 @@ class ExportService {
         const mediaKey = this.getMediaCacheKey(msg)
         const mediaItem = mediaCache.get(mediaKey)
 
-        if (msg.localType === 34 && options.exportVoiceAsText) {
+        if (msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText) {
           content = voiceTranscriptMap.get(this.getStableMessageKey(msg)) || '[语音消息 - 转文字失败]'
-        } else if (mediaItem && msg.localType !== 47) {
+        } else if (mediaItem && msg.localType !== MSG_TYPE.EMOJI) {
           content = mediaItem.relativePath
         } else {
           content = this.parseMessageContent(
@@ -7249,7 +7239,7 @@ class ExportService {
           senderAvatarKey: msg.senderUsername
         }
 
-        if (msg.localType === 47) {
+        if (msg.localType === MSG_TYPE.EMOJI) {
           if (msg.emojiMd5) msgObj.emojiMd5 = msg.emojiMd5
           if (msg.emojiCdnUrl) msgObj.emojiCdnUrl = msg.emojiCdnUrl
           if (msg.emojiCaption) msgObj.emojiCaption = msg.emojiCaption
@@ -7287,7 +7277,7 @@ class ExportService {
         }
 
         // 位置消息：附加结构化位置字段
-        if (msg.localType === 48) {
+        if (msg.localType === MSG_TYPE.LOCATION) {
           if (msg.locationLat != null) msgObj.locationLat = msg.locationLat
           if (msg.locationLng != null) msgObj.locationLng = msg.locationLng
           if (msg.locationPoiname) msgObj.locationPoiname = msg.locationPoiname
@@ -7734,7 +7724,7 @@ class ExportService {
       await this.resolveQuotedMessagesForExport(collected.rows, sessionId)
 
       const voiceMessages = options.exportVoiceAsText
-        ? collected.rows.filter(msg => msg.localType === 34)
+        ? collected.rows.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
 
       if (options.exportVoiceAsText && voiceMessages.length > 0) {
@@ -7905,7 +7895,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -8088,7 +8078,7 @@ class ExportService {
 
         const mediaKey = this.getMediaCacheKey(msg)
         const mediaItem = mediaCache.get(mediaKey)
-        const shouldUseTranscript = msg.localType === 34 && options.exportVoiceAsText
+        const shouldUseTranscript = msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText
         const contentValue = shouldUseTranscript
           ? this.formatPlainExportContent(
             msg.content,
@@ -8100,7 +8090,7 @@ class ExportService {
             msg.isSend,
             msg.emojiCaption
           )
-          : ((msg.localType !== 47 ? mediaItem?.relativePath : undefined)
+          : ((msg.localType !== MSG_TYPE.EMOJI ? mediaItem?.relativePath : undefined)
             || this.formatPlainExportContent(
               msg.content,
               msg.localType,
@@ -8377,7 +8367,7 @@ class ExportService {
 
         const mediaKey = this.getMediaCacheKey(msg)
         const mediaItem = mediaCache.get(mediaKey)
-        const shouldUseTranscript = msg.localType === 34 && options.exportVoiceAsText
+        const shouldUseTranscript = msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText
         const contentValue = shouldUseTranscript
           ? this.formatPlainExportContent(
             msg.content,
@@ -8389,7 +8379,7 @@ class ExportService {
             msg.isSend,
             msg.emojiCaption
           )
-          : ((msg.localType !== 47 ? mediaItem?.relativePath : undefined)
+          : ((msg.localType !== MSG_TYPE.EMOJI ? mediaItem?.relativePath : undefined)
             || this.formatPlainExportContent(
               msg.content,
               msg.localType,
@@ -8615,7 +8605,7 @@ class ExportService {
       await this.resolveQuotedMessagesForExport(collected.rows, sessionId)
 
       const voiceMessages = options.exportVoiceAsText
-        ? collected.rows.filter(msg => msg.localType === 34)
+        ? collected.rows.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
 
       if (options.exportVoiceAsText && voiceMessages.length > 0) {
@@ -8660,7 +8650,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -8788,7 +8778,7 @@ class ExportService {
         const msg = sortedMessages[i]
         const mediaKey = this.getMediaCacheKey(msg)
         const mediaItem = mediaCache.get(mediaKey)
-        const shouldUseTranscript = msg.localType === 34 && options.exportVoiceAsText
+        const shouldUseTranscript = msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText
         const contentValue = shouldUseTranscript
           ? this.formatPlainExportContent(
             msg.content,
@@ -8800,7 +8790,7 @@ class ExportService {
             msg.isSend,
             msg.emojiCaption
           )
-          : ((msg.localType !== 47 ? mediaItem?.relativePath : undefined)
+          : ((msg.localType !== MSG_TYPE.EMOJI ? mediaItem?.relativePath : undefined)
             || this.formatPlainExportContent(
               msg.content,
               msg.localType,
@@ -9041,7 +9031,7 @@ class ExportService {
       }
 
       const voiceMessages = options.exportVoiceAsText
-        ? sortedMessages.filter(msg => msg.localType === 34)
+        ? sortedMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
 
       if (options.exportVoiceAsText && voiceMessages.length > 0) {
@@ -9060,7 +9050,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -9234,7 +9224,7 @@ class ExportService {
           )
         }
 
-        const msgText = msg.localType === 34 && options.exportVoiceAsText
+        const msgText = msg.localType === MSG_TYPE.VOICE && options.exportVoiceAsText
           ? (voiceTranscriptMap.get(this.getStableMessageKey(msg)) || '[语音消息 - 转文字失败]')
           : (this.parseMessageContent(
             msg.content,
@@ -9507,7 +9497,7 @@ class ExportService {
           exportImages: options.exportImages,
           exportVideos: options.exportVideos
         }, control)
-        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === 34)
+        const voiceMediaMessages = mediaMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         if (voiceMediaMessages.length > 0) {
           await this.preloadVoiceWavCache(sessionId, voiceMediaMessages, control)
         }
@@ -9565,7 +9555,7 @@ class ExportService {
 
       const useVoiceTranscript = options.exportVoiceAsText === true
       const voiceMessages = useVoiceTranscript
-        ? sortedMessages.filter(msg => msg.localType === 34)
+        ? sortedMessages.filter(msg => msg.localType === MSG_TYPE.VOICE)
         : []
       const voiceTranscriptMap = new Map<string, string>()
 
@@ -9759,10 +9749,10 @@ class ExportService {
           msg.isSend,
           msg.emojiCaption
         )
-        if (msg.localType === 34 && useVoiceTranscript) {
+        if (msg.localType === MSG_TYPE.VOICE && useVoiceTranscript) {
           textContent = voiceTranscriptMap.get(this.getStableMessageKey(msg)) || '[语音消息 - 转文字失败]'
         }
-        if (mediaItem && msg.localType === 3) {
+        if (mediaItem && msg.localType === MSG_TYPE.IMAGE) {
           textContent = ''
         }
         if (this.isTransferExportContent(textContent) && msg.content) {
@@ -10183,16 +10173,16 @@ class ExportService {
           latestTimestamp = msg.createTime
         }
         const localType = msg.localType
-        if (localType === 34) {
+        if (localType === MSG_TYPE.VOICE) {
           voiceCount++
           if (chatService.hasTranscriptCache(sessionId, String(msg.localId), msg.createTime)) {
             cached++
           }
           continue
         }
-        if (localType === 3) imageCount++
-        if (localType === 43) videoCount++
-        if (localType === 47) emojiCount++
+        if (localType === MSG_TYPE.IMAGE) imageCount++
+        if (localType === MSG_TYPE.VIDEO) videoCount++
+        if (localType === MSG_TYPE.EMOJI) emojiCount++
       }
       const mediaCount = voiceCount + imageCount + videoCount + emojiCount
 

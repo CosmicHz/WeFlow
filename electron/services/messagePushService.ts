@@ -6,6 +6,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
 import { pathToFileURL } from 'url'
+import { MSG_TYPE } from '../../shared/messageTypes'
 
 interface SessionBaseline {
   lastTimestamp: number
@@ -600,7 +601,7 @@ class MessagePushService {
         `SELECT *, '${this.escapeSqlString(table.dbPath)}' AS _db_path, '${this.escapeSqlString(table.tableName)}' AS table_name`,
         `FROM ${this.quoteSqlIdentifier(table.tableName)}`,
         `WHERE create_time >= ${sinceSeconds}`,
-        `AND (local_type IN (10000, 10002) OR message_content LIKE '%撤回%' OR message_content LIKE '%revokemsg%' OR message_content LIKE '%<replacemsg%' OR compress_content LIKE '%撤回%' OR compress_content LIKE '%revokemsg%')`,
+        `AND (local_type IN (${MSG_TYPE.SYSTEM}, ${MSG_TYPE.RECALL}) OR message_content LIKE '%撤回%' OR message_content LIKE '%revokemsg%' OR message_content LIKE '%<replacemsg%' OR compress_content LIKE '%撤回%' OR compress_content LIKE '%revokemsg%')`,
         `ORDER BY create_time ASC, sort_seq ASC, local_id ASC`,
         `LIMIT ${this.directRevokeScanLimit}`
       ].join(' ')
@@ -660,7 +661,7 @@ class MessagePushService {
         `FROM ${this.quoteSqlIdentifier(table.tableName)}`,
         `WHERE ${serverPredicate}`,
         localFilter,
-        `AND local_type NOT IN (10000, 10002)`,
+        `AND local_type NOT IN (${MSG_TYPE.SYSTEM}, ${MSG_TYPE.RECALL})`,
         `ORDER BY local_id ASC`,
         `LIMIT 1`
       ].filter(Boolean).join(' ')
@@ -754,14 +755,14 @@ class MessagePushService {
     const content = `${message.rawContent || ''}\n${message.parsedContent || ''}`
     if (content.includes('revokemsg') || content.includes('<replacemsg')) return true
     if (content.includes('撤回了一条消息') || content.includes('尝试撤回此消息')) return true
-    if ((localType === 10000 || localType === 10002) && content.includes('撤回')) return true
+    if ((localType === MSG_TYPE.SYSTEM || localType === MSG_TYPE.RECALL) && content.includes('撤回')) return true
     return false
   }
 
   private isRevokeSessionSummary(session: ChatSession): boolean {
     const lastMsgType = Number(session.lastMsgType || 0)
     const summary = String(session.summary || '').trim()
-    return lastMsgType === 10002 || summary.includes('撤回了一条消息') || summary.includes('尝试撤回此消息')
+    return lastMsgType === MSG_TYPE.RECALL || summary.includes('撤回了一条消息') || summary.includes('尝试撤回此消息')
   }
 
   private isSelfRevokeMessage(message: Message): boolean {
@@ -1336,21 +1337,21 @@ class MessagePushService {
       return value.replace(/^\s*\[视频号\]\s*/u, '').trim() || value
     }
     switch (Number(message.localType || 0)) {
-      case 1:
+      case MSG_TYPE.TEXT:
         return cleanOfficialPrefix(normalizeTextContent(message.parsedContent || message.rawContent))
-      case 3:
+      case MSG_TYPE.IMAGE:
         return '[图片]'
-      case 34:
+      case MSG_TYPE.VOICE:
         return '[语音]'
-      case 43:
+      case MSG_TYPE.VIDEO:
         return '[视频]'
-      case 47:
+      case MSG_TYPE.EMOJI:
         return '[表情]'
-      case 42:
+      case MSG_TYPE.CARD:
         return cleanOfficialPrefix(message.cardNickname || '[名片]')
-      case 48:
+      case MSG_TYPE.LOCATION:
         return '[位置]'
-      case 49:
+      case MSG_TYPE.APP_MESSAGE:
         return cleanOfficialPrefix(message.linkTitle || message.fileName || '[消息]')
       default:
         return cleanOfficialPrefix(normalizeTextContent(message.parsedContent || message.rawContent) || null)

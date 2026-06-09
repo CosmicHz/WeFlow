@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
+import { MSG_TYPE } from '../../shared/messageTypes'
 import { Users, BarChart3, Clock, Image, Loader2, RefreshCw, Medal, Search, X, ChevronLeft, Copy, Check, Download, ChevronDown, MessageSquare, Calendar, PieChart, Hash, Smile } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import ReactECharts from 'echarts-for-react'
@@ -89,26 +90,26 @@ const formatMemberMessageTime = (createTime: number) => {
 
 const getMemberMessageTypeLabel = (message: Message) => {
   switch (message.localType) {
-    case 1:
+    case MSG_TYPE.TEXT:
       return '文本'
-    case 3:
+    case MSG_TYPE.IMAGE:
       return '图片'
-    case 34:
+    case MSG_TYPE.VOICE:
       return '语音'
-    case 42:
+    case MSG_TYPE.CARD:
       return '名片'
-    case 43:
+    case MSG_TYPE.VIDEO:
       return '视频'
-    case 47:
+    case MSG_TYPE.EMOJI:
       return '表情'
-    case 48:
+    case MSG_TYPE.LOCATION:
       return '位置'
-    case 49:
+    case MSG_TYPE.APP_MESSAGE:
       return message.fileName ? '文件' : '链接'
-    case 50:
+    case MSG_TYPE.CALL:
       return '通话'
-    case 10000:
-    case 10002:
+    case MSG_TYPE.SYSTEM:
+    case MSG_TYPE.RECALL:
       return '系统'
     default:
       return `类型 ${message.localType}`
@@ -118,27 +119,27 @@ const getMemberMessageTypeLabel = (message: Message) => {
 const getMemberMessagePreview = (message: Message) => {
   const text = (message.parsedContent || message.content || message.rawContent || '').trim()
   switch (message.localType) {
-    case 1:
-    case 10000:
-    case 10002:
+    case MSG_TYPE.TEXT:
+    case MSG_TYPE.SYSTEM:
+    case MSG_TYPE.RECALL:
       return text || '[空文本]'
-    case 3:
+    case MSG_TYPE.IMAGE:
       return text || '[图片]'
-    case 34:
+    case MSG_TYPE.VOICE:
       return message.voiceDurationSeconds ? `[语音] ${message.voiceDurationSeconds} 秒` : '[语音]'
-    case 42:
+    case MSG_TYPE.CARD:
       return `[名片] ${message.cardNickname || message.cardUsername || text || '联系人名片'}`
-    case 43:
+    case MSG_TYPE.VIDEO:
       return text || '[视频]'
-    case 47:
+    case MSG_TYPE.EMOJI:
       return text || '[表情]'
-    case 48:
+    case MSG_TYPE.LOCATION:
       return `[位置] ${message.locationPoiname || message.locationLabel || text || '位置消息'}`
-    case 49:
+    case MSG_TYPE.APP_MESSAGE:
       if (message.fileName) return `[文件] ${message.fileName}`
       if (message.linkTitle) return `[链接] ${message.linkTitle}`
       return text || '[链接/文件]'
-    case 50:
+    case MSG_TYPE.CALL:
       return text || '[通话]'
     default:
       return text || `[消息类型 ${message.localType}]`

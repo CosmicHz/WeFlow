@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HTTP API 服务
  * 提供 ChatLab 标准化格式的消息查询 API
  */
@@ -14,6 +14,7 @@ import { videoService } from './videoService'
 import { imageDecryptService } from './imageDecryptService'
 import { groupAnalyticsService } from './groupAnalyticsService'
 import { snsService } from './snsService'
+import { MSG_TYPE, isSystemMessage as isSystemMessageType } from '../../shared/messageTypes'
 
 // ChatLab 格式定义
 interface ChatLabHeader {
@@ -1462,7 +1463,7 @@ class HttpService {
     if (options.exportImages) {
       const imageMd5Set = new Set<string>()
       for (const msg of messages) {
-        if (msg.localType !== 3) continue
+        if (msg.localType !== MSG_TYPE.IMAGE) continue
         const imageMd5 = String(msg.imageMd5 || '').trim().toLowerCase()
         if (imageMd5) {
           imageMd5Set.add(imageMd5)
@@ -1499,7 +1500,7 @@ class HttpService {
     options: ApiMediaOptions
   ): Promise<ApiExportedMedia | null> {
     try {
-      if (msg.localType === 3 && options.exportImages) {
+      if (msg.localType === MSG_TYPE.IMAGE && options.exportImages) {
         const result = await imageDecryptService.decryptImage({
           sessionId: talker,
           imageMd5: msg.imageMd5,
@@ -1564,7 +1565,7 @@ class HttpService {
         }
       }
 
-      if (msg.localType === 34 && options.exportVoices) {
+      if (msg.localType === MSG_TYPE.VOICE && options.exportVoices) {
         const result = await chatService.getVoiceData(
           talker,
           String(msg.localId),
@@ -1584,7 +1585,7 @@ class HttpService {
         }
       }
 
-      if (msg.localType === 43 && options.exportVideos && msg.videoMd5) {
+      if (msg.localType === MSG_TYPE.VIDEO && options.exportVideos && msg.videoMd5) {
         const info = await videoService.getVideoInfo(msg.videoMd5)
         if (info.exists && info.videoUrl && fs.existsSync(info.videoUrl)) {
           const ext = path.extname(info.videoUrl) || '.mp4'
@@ -1600,7 +1601,7 @@ class HttpService {
         }
       }
 
-      if (msg.localType === 47 && options.exportEmojis && msg.emojiCdnUrl) {
+      if (msg.localType === MSG_TYPE.EMOJI && options.exportEmojis && msg.emojiCdnUrl) {
         const result = await chatService.downloadEmoji(msg.emojiCdnUrl, msg.emojiMd5)
         if (result.success && result.localPath && fs.existsSync(result.localPath)) {
           const sourceExt = path.extname(result.localPath) || '.gif'
@@ -1836,7 +1837,7 @@ class HttpService {
     }
 
     if (!sender) {
-      if (msg.localType === 10000 || msg.localType === 266287972401) {
+      if (isSystemMessageType(msg.localType)) {
         sender = talkerId
       } else {
         sender = `unknown_sender_${msg.localId || msg.createTime || 0}`
@@ -1971,29 +1972,29 @@ class HttpService {
    */
   private mapMessageType(localType: number, msg: Message): number {
     switch (localType) {
-      case 1: // 文本
+      case MSG_TYPE.TEXT: // 文本
         return ChatLabType.TEXT
-      case 3: // 图片
+      case MSG_TYPE.IMAGE: // 图片
         return ChatLabType.IMAGE
-      case 34: // 语音
+      case MSG_TYPE.VOICE: // 语音
         return ChatLabType.VOICE
-      case 43: // 视频
+      case MSG_TYPE.VIDEO: // 视频
         return ChatLabType.VIDEO
-      case 47: // 动画表情
+      case MSG_TYPE.EMOJI: // 动画表情
         return ChatLabType.EMOJI
-      case 48: // 位置
+      case MSG_TYPE.LOCATION: // 位置
         return ChatLabType.LOCATION
-      case 42: // 名片
+      case MSG_TYPE.CARD: // 名片
         return ChatLabType.CONTACT
-      case 50: // 语音/视频通话
+      case MSG_TYPE.CALL: // 语音/视频通话
         return ChatLabType.CALL
-      case 10000: // 系统消息
+      case MSG_TYPE.SYSTEM: // 系统消息
         return ChatLabType.SYSTEM
-      case 49: // 复合消息
+      case MSG_TYPE.APP_MESSAGE: // 复合消息
         return this.mapType49(msg)
-      case 244813135921: // 引用消息
+      case MSG_TYPE.QUOTE_TEXT: // 引用消息
         return ChatLabType.REPLY
-      case 266287972401: // 拍一拍
+      case MSG_TYPE.PAT: // 拍一拍
         return ChatLabType.POKE
       case 8594229559345: // 红包
         return ChatLabType.RED_PACKET
@@ -2125,7 +2126,7 @@ class HttpService {
       return text.replace(/^[\s]*([a-zA-Z0-9_@-]+):(?!\/\/)(?:\s*(?:\r?\n|<br\s*\/?>)\s*|\s*)/i, '').trim()
     }
 
-    if (msg.localType === 49) {
+    if (msg.localType === MSG_TYPE.APP_MESSAGE) {
       return this.getType49Content(msg, quoteInfo)
     }
 
@@ -2140,21 +2141,21 @@ class HttpService {
 
     // 根据类型返回占位符
     switch (msg.localType) {
-      case 1:
+      case MSG_TYPE.TEXT:
         return normalizeTextContent(msg.parsedContent || msg.rawContent)
-      case 3:
+      case MSG_TYPE.IMAGE:
         return '[图片]'
-      case 34:
+      case MSG_TYPE.VOICE:
         return '[语音]'
-      case 43:
+      case MSG_TYPE.VIDEO:
         return '[视频]'
-      case 47:
+      case MSG_TYPE.EMOJI:
         return '[表情]'
-      case 42:
+      case MSG_TYPE.CARD:
         return msg.cardNickname || '[名片]'
-      case 48:
+      case MSG_TYPE.LOCATION:
         return '[位置]'
-      case 49:
+      case MSG_TYPE.APP_MESSAGE:
         return this.getType49Content(msg, quoteInfo)
       default:
         return normalizeTextContent(msg.parsedContent || msg.rawContent) || null
@@ -2163,8 +2164,8 @@ class HttpService {
 
   private isReplyMessage(msg: Message, quoteInfo?: ApiQuoteInfo): boolean {
     if (!quoteInfo?.replyToMessageId && !quoteInfo?.quote) return false
-    if (msg.localType === 244813135921) return true
-    if (msg.localType === 49 && this.resolveType49Subtype(msg) === '57') return true
+    if (msg.localType === MSG_TYPE.QUOTE_TEXT) return true
+    if (msg.localType === MSG_TYPE.APP_MESSAGE && this.resolveType49Subtype(msg) === '57') return true
     return false
   }
 
@@ -2291,21 +2292,21 @@ class HttpService {
   private resolveQuotedContent(referMsgXml: string, referTypeRaw: string, referContentRaw: string): string {
     const referType = String(referTypeRaw || '').trim()
     switch (referType) {
-      case '1':
+      case String(MSG_TYPE.TEXT):
         return this.extractPreferredQuotedText(referMsgXml)
-      case '3':
+      case String(MSG_TYPE.IMAGE):
         return '[图片]'
-      case '34':
+      case String(MSG_TYPE.VOICE):
         return '[语音]'
-      case '43':
+      case String(MSG_TYPE.VIDEO):
         return '[视频]'
-      case '47':
+      case String(MSG_TYPE.EMOJI):
         return '[动画表情]'
       case '42':
         return '[名片]'
       case '48':
         return '[位置]'
-      case '49': {
+      case String(MSG_TYPE.APP_MESSAGE): {
         const innerType = this.extractType49Subtype(referContentRaw)
         if (innerType === '57') {
           return this.extractAppMessageTitle(referContentRaw) || '[引用消息]'
@@ -2359,15 +2360,15 @@ class HttpService {
   private mapQuotedMessageType(referTypeRaw: string, referContentRaw: string): number | undefined {
     const referType = String(referTypeRaw || '').trim()
     switch (referType) {
-      case '1':
+      case String(MSG_TYPE.TEXT):
         return ChatLabType.TEXT
-      case '3':
+      case String(MSG_TYPE.IMAGE):
         return ChatLabType.IMAGE
-      case '34':
+      case String(MSG_TYPE.VOICE):
         return ChatLabType.VOICE
-      case '43':
+      case String(MSG_TYPE.VIDEO):
         return ChatLabType.VIDEO
-      case '47':
+      case String(MSG_TYPE.EMOJI):
         return ChatLabType.EMOJI
       case '48':
         return ChatLabType.LOCATION
@@ -2375,9 +2376,9 @@ class HttpService {
         return ChatLabType.CONTACT
       case '50':
         return ChatLabType.CALL
-      case '10000':
+      case String(MSG_TYPE.SYSTEM):
         return ChatLabType.SYSTEM
-      case '49':
+      case String(MSG_TYPE.APP_MESSAGE):
         return this.mapQuotedType49MessageType(referContentRaw)
       default:
         return undefined

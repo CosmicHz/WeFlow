@@ -1,6 +1,7 @@
 import { parentPort } from 'worker_threads'
 import { wcdbService } from './wcdbService'
 import { resolveAccountDir } from './accountDirResolver'
+import { MSG_TYPE } from '../../shared/messageTypes'
 
 
 export interface DualReportMessage {
@@ -395,7 +396,7 @@ class DualReportService {
 
         for (const row of batch.rows) {
           const localType = this.getRowInt(row, ['local_type', 'localType', 'type', 'msg_type', 'msgType', 'WCDB_CT_local_type'], 0)
-          if (localType !== 47) continue
+          if (localType !== MSG_TYPE.EMOJI) continue
 
           const rawContent = this.decodeRowMessageContent(row)
           const content = this.stripEmojiOwnerPrefix(rawContent)
@@ -551,7 +552,7 @@ class DualReportService {
         const localType = this.getRowInt(row, ['local_type', 'localType', 'type', 'msg_type', 'msgType'], 0)
         let emojiMd5: string | undefined
         let emojiCdnUrl: string | undefined
-        if (localType === 47) {
+        if (localType === MSG_TYPE.EMOJI) {
           const stripped = this.stripEmojiOwnerPrefix(rawContent)
           emojiMd5 = this.normalizeEmojiMd5(this.coerceString(this.getRecordField(row, ['emoji_md5', 'emojiMd5', 'md5']))) || this.extractEmojiMd5(stripped)
           emojiCdnUrl = this.normalizeEmojiUrl(this.coerceString(this.getRecordField(row, ['emoji_cdn_url', 'emojiCdnUrl', 'cdnurl']))) || this.extractEmojiUrl(stripped)
@@ -574,7 +575,7 @@ class DualReportService {
         const localType = this.getRowInt(row, ['local_type', 'localType', 'type', 'msg_type', 'msgType'], 0)
         let emojiMd5: string | undefined
         let emojiCdnUrl: string | undefined
-        if (localType === 47) {
+        if (localType === MSG_TYPE.EMOJI) {
           const stripped = this.stripEmojiOwnerPrefix(rawContent)
           emojiMd5 = this.normalizeEmojiMd5(this.coerceString(this.getRecordField(row, ['emoji_md5', 'emojiMd5', 'md5']))) || this.extractEmojiMd5(stripped)
           emojiCdnUrl = this.normalizeEmojiUrl(this.coerceString(this.getRecordField(row, ['emoji_cdn_url', 'emojiCdnUrl', 'cdnurl']))) || this.extractEmojiUrl(stripped)
@@ -604,7 +605,7 @@ class DualReportService {
             const localType = this.getRowInt(row, ['local_type', 'localType', 'type', 'msg_type', 'msgType'], 0)
             let emojiMd5: string | undefined
             let emojiCdnUrl: string | undefined
-            if (localType === 47) {
+            if (localType === MSG_TYPE.EMOJI) {
               const stripped = this.stripEmojiOwnerPrefix(rawContent)
               emojiMd5 = this.normalizeEmojiMd5(this.coerceString(this.getRecordField(row, ['emoji_md5', 'emojiMd5', 'md5']))) || this.extractEmojiMd5(stripped)
               emojiCdnUrl = this.normalizeEmojiUrl(this.coerceString(this.getRecordField(row, ['emoji_cdn_url', 'emojiCdnUrl', 'cdnurl']))) || this.extractEmojiUrl(stripped)
@@ -625,7 +626,7 @@ class DualReportService {
           const localTypeYear = this.getRowInt(firstRowYear, ['local_type', 'localType', 'type', 'msg_type', 'msgType'], 0)
           let emojiMd5Year: string | undefined
           let emojiCdnUrlYear: string | undefined
-          if (localTypeYear === 47) {
+          if (localTypeYear === MSG_TYPE.EMOJI) {
             const stripped = this.stripEmojiOwnerPrefix(rawContentYear)
             emojiMd5Year = this.normalizeEmojiMd5(this.coerceString(this.getRecordField(firstRowYear, ['emoji_md5', 'emojiMd5', 'md5']))) || this.extractEmojiMd5(stripped)
             emojiCdnUrlYear = this.normalizeEmojiUrl(this.coerceString(this.getRecordField(firstRowYear, ['emoji_cdn_url', 'emojiCdnUrl', 'cdnurl']))) || this.extractEmojiUrl(stripped)

@@ -1,4 +1,5 @@
 // 分析数据类型定义
+import { MESSAGE_TYPE_LABELS as SHARED_MESSAGE_TYPE_LABELS } from '../../shared/messageTypes'
 
 // 聊天统计数据
 export interface ChatStatistics {
@@ -35,20 +36,8 @@ export interface ContactRanking {
   lastMessageTime: number | null
 }
 
-// 消息类型标签映射
-export const MESSAGE_TYPE_LABELS: Record<number, string> = {
-  1: '文本',
-  244813135921: '文本',
-  3: '图片',
-  34: '语音',
-  42: '名片',
-  43: '视频',
-  47: '表情',
-  48: '位置',
-  49: '链接/文件',
-  50: '通话',
-  10000: '系统消息',
-}
+// 消息类型标签映射（从共享模块导出，保持向后兼容）
+export const MESSAGE_TYPE_LABELS = SHARED_MESSAGE_TYPE_LABELS
 
 // 星期几名称
 export const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']

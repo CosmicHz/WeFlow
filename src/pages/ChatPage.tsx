@@ -32,14 +32,9 @@ import {
 } from '../services/exportBridge'
 import ChatHeader from './Chat/ChatHeader'
 import ChatMessageBubble from './Chat/ChatMessageBubble'
+import { MSG_TYPE, XML_TYPE, isSystemMessage, REFER_TYPE_LABELS } from '../../shared/messageTypes'
 import '../styles/batchTranscribe.scss'
 import './ChatPage.scss'
-
-// 系统消息类型常量
-const SYSTEM_MESSAGE_TYPES = [
-  10000,        // 系统消息
-  266287972401, // 拍一拍
-]
 
 const OFFICIAL_ACCOUNTS_VIRTUAL_ID = 'official_accounts_virtual'
 
@@ -667,11 +662,6 @@ function updateXmlWithFields(xml: string, fields: XmlField[]): string {
   } catch (e) {
     return xml
   }
-}
-
-// 判断是否为系统消息
-function isSystemMessage(localType: number): boolean {
-  return SYSTEM_MESSAGE_TYPES.includes(localType)
 }
 
 // 格式化文件大小
@@ -5507,7 +5497,7 @@ function ChatPage(props: ChatPageProps) {
         const payloads: Array<{ sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }> = []
         for (const msg of candidates) {
           if (payloads.length >= maxPreload) break
-          if (msg.localType !== 3) continue
+          if (msg.localType !== MSG_TYPE.IMAGE) continue
           const cacheKey = msg.imageMd5 || msg.imageDatName || `local:${msg.localId}`
           if (!msg.imageMd5 && !msg.imageDatName) continue
           if (imageDataUrlCache.has(cacheKey)) continue
@@ -7034,7 +7024,7 @@ function ChatPage(props: ChatPageProps) {
       // 允许编辑所有类型的消息
       // 如果是文本消息(1)，使用 parsedContent
       // 如果是其他类型(如系统消息 10000)，使用 rawContent 或 content 作为 XML 源码编辑
-      const isText = contextMenu.message.localType === 1
+      const isText = contextMenu.message.localType === MSG_TYPE.TEXT
       const rawXml = contextMenu.message.content || (contextMenu.message as any).rawContent || contextMenu.message.parsedContent || ''
 
       const contentToEdit = isText
@@ -8545,7 +8535,7 @@ function ChatPage(props: ChatPageProps) {
           >
             <div className="menu-item" onClick={handleEditMessage}>
               <Edit2 size={16} />
-              <span>{contextMenu.message.localType === 1 ? '修改消息' : '编辑源码'}</span>
+              <span>{contextMenu.message.localType === MSG_TYPE.TEXT ? '修改消息' : '编辑源码'}</span>
             </div>
             <div className="menu-item" onClick={() => {
               setIsSelectionMode(true)
@@ -8678,7 +8668,7 @@ function ChatPage(props: ChatPageProps) {
                 </div>
               )}
 
-              {showMessageInfo.localType !== 1 && (showMessageInfo.rawContent || showMessageInfo.content) && (
+              {showMessageInfo.localType !== MSG_TYPE.TEXT && (showMessageInfo.rawContent || showMessageInfo.content) && (
                 <div className="detail-section">
                   <div className="section-title">
                     <span>原始消息内容</span>
@@ -8775,7 +8765,7 @@ function ChatPage(props: ChatPageProps) {
         <div className="modal-overlay">
           <div className="modal-content edit-message-modal">
             <div className="modal-header">
-              <h3 style={{ margin: 0 }}>{editingMessage.message.localType === 1 ? '修改消息' : '编辑消息'}</h3>
+              <h3 style={{ margin: 0 }}>{editingMessage.message.localType === MSG_TYPE.TEXT ? '修改消息' : '编辑消息'}</h3>
               <button className="close-btn" onClick={() => setEditingMessage(null)}>
                 <X size={16} />
               </button>
@@ -8788,7 +8778,7 @@ function ChatPage(props: ChatPageProps) {
                   style={{ fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }}
                   value={editingMessage.content}
                   onChange={(e) => setEditingMessage({ ...editingMessage, content: e.target.value })}
-                  rows={editingMessage.message.localType === 1 ? 8 : 15}
+                  rows={editingMessage.message.localType === MSG_TYPE.TEXT ? 8 : 15}
                 />
               ) : (
                 <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -8830,7 +8820,7 @@ function ChatPage(props: ChatPageProps) {
 
             <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
               <div>
-                {editingMessage.message.localType !== 1 && tempFields.length > 0 && (
+                {editingMessage.message.localType !== MSG_TYPE.TEXT && tempFields.length > 0 && (
                   <button
                     onClick={() => setEditMode(editMode === 'raw' ? 'fields' : 'raw')}
                     style={{
@@ -9279,13 +9269,13 @@ function MessageBubble({
   aiMessageInsightContextCount?: number;
 }) {
   const isSystem = isSystemMessage(message.localType)
-  const isEmoji = message.localType === 47
-  const isImage = message.localType === 3
-  const isVideo = message.localType === 43
-  const isVoice = message.localType === 34
-  const isCard = message.localType === 42
-  const isCall = message.localType === 50
-  const isType49 = message.localType === 49
+  const isEmoji = message.localType === MSG_TYPE.EMOJI
+  const isImage = message.localType === MSG_TYPE.IMAGE
+  const isVideo = message.localType === MSG_TYPE.VIDEO
+  const isVoice = message.localType === MSG_TYPE.VOICE
+  const isCard = message.localType === MSG_TYPE.CARD
+  const isCall = message.localType === MSG_TYPE.CALL
+  const isType49 = message.localType === MSG_TYPE.APP_MESSAGE
   const isSent = message.isSend === 1
   const [senderAvatarUrl, setSenderAvatarUrl] = useState<string | undefined>(undefined)
   const [senderName, setSenderName] = useState<string | undefined>(undefined)
@@ -9652,7 +9642,7 @@ function MessageBubble({
     const receiverWxid = (message as any).transferReceiverUsername
     if (!payerWxid && !receiverWxid) return
     // 仅对转账消息类型处理
-    if (message.localType !== 49 && message.localType !== 8589934592049) return
+    if (message.localType !== MSG_TYPE.APP_MESSAGE && message.localType !== MSG_TYPE.TRANSFER) return
 
     window.electronAPI.chat.resolveTransferDisplayNames(
       session.username,
@@ -10465,7 +10455,7 @@ function MessageBubble({
   // quoteLayout config removed - Ambient Reply uses a single fixed layout
 
   const locationMessageMeta = useMemo(() => {
-    if (message.localType !== 48) return null
+    if (message.localType !== MSG_TYPE.LOCATION) return null
     const raw = message.rawContent || ''
     const poiname = raw.match(/poiname="([^"]*)"/)?.[1] || message.locationPoiname || '位置'
     const label = raw.match(/label="([^"]*)"/)?.[1] || message.locationLabel || ''
@@ -10506,7 +10496,7 @@ function MessageBubble({
     !isCard &&
     !isCall &&
     !isType49 &&
-    message.localType === 1 &&
+    message.localType === MSG_TYPE.TEXT &&
     cleanedParsedContent.trim()
   )
   const messageInsightControl = canShowMessageInsight ? (
@@ -10632,7 +10622,7 @@ function MessageBubble({
   // Selection mode handling removed from here to allow normal rendering
   // We will wrap the output instead
   if (isSystem) {
-    const isPatSystemMessage = message.localType === 266287972401
+    const isPatSystemMessage = message.localType === MSG_TYPE.PAT
     const patTitleRaw = isPatSystemMessage
       ? (queryAppMsgText('appmsg > title') || queryAppMsgText('title') || message.parsedContent || '')
       : ''
@@ -11044,7 +11034,7 @@ function MessageBubble({
     }
 
     // 位置消息
-    if (message.localType === 48) {
+    if (message.localType === MSG_TYPE.LOCATION) {
       if (!locationMessageMeta) return null
       const { poiname, label, lat, lng, mapTileUrl } = locationMessageMeta
       return (
@@ -11079,13 +11069,13 @@ function MessageBubble({
       const xmlType = message.xmlType || q('appmsg > type') || q('type')
 
       // type 62: 拍一拍（按普通文本渲染，支持 [烟花] 这类 emoji 占位符）
-      if (xmlType === '62') {
+      if (xmlType === String(XML_TYPE.GROUP_NOTE)) {
         const patText = cleanMessageContent((q('title') || cleanedParsedContent || '').replace(/^\s*\[拍一拍\]\s*/i, ''))
         return <div className="bubble-content">{renderTextWithEmoji(patText || '拍一拍')}</div>
       }
 
       // type 57: 引用回复消息，解析 refermsg 渲染为引用样式
-      if (xmlType === '57') {
+      if (xmlType === String(XML_TYPE.QUOTE)) {
         const replyText = q('title') || cleanedParsedContent || ''
         const referContent = queryPreferredQuotedContent()
         const referType = q('refermsg > type') || ''
@@ -11123,13 +11113,8 @@ function MessageBubble({
             return <span className="quoted-type-label">[链接]</span>
           }
 
-          // 各类型名称映射
-          const typeLabels: Record<string, string> = {
-            '3': '图片', '34': '语音', '43': '视频',
-            '50': '通话', '10000': '系统消息', '10002': '撤回消息',
-          }
-          if (referType && typeLabels[referType]) {
-            return <span className="quoted-type-label">[{typeLabels[referType]}]</span>
+          if (referType && REFER_TYPE_LABELS[referType]) {
+            return <span className="quoted-type-label">[{REFER_TYPE_LABELS[referType]}]</span>
           }
 
           // 普通文本或未知类型
@@ -11144,7 +11129,7 @@ function MessageBubble({
         )
       }
 
-      if (xmlType === '53' || message.appMsgKind === 'solitaire') {
+      if (xmlType === String(XML_TYPE.SOLITAIRE) || message.appMsgKind === 'solitaire') {
         const solitaireText = message.linkTitle || q('appmsg > title') || q('title') || cleanedParsedContent || '接龙'
         const solitaire = parseSolitaireContent(solitaireText)
         const previewEntries = solitaireExpanded ? solitaire.entries : solitaire.entries.slice(0, 3)
@@ -11230,13 +11215,13 @@ function MessageBubble({
       const lower = rawXml.toLowerCase()
 
       const kind = message.appMsgKind || (
-        (xmlType === '2001' || lower.includes('hongbao')) ? 'red-packet'
-          : (xmlType === '115' ? 'gift'
-            : ((xmlType === '33' || xmlType === '36') ? 'miniapp'
-              : (((xmlType === '5' || xmlType === '49') && (sourceUsername.startsWith('gh_') || !!sourceName || appName.includes('公众号'))) ? 'official-link'
-                : (xmlType === '51' ? 'finder'
-                  : (xmlType === '3' ? 'music'
-                    : ((xmlType === '5' || xmlType === '49') ? 'link' // Fallback for standard links
+        (xmlType === String(XML_TYPE.RED_PACKET) || lower.includes('hongbao')) ? 'red-packet'
+          : (xmlType === String(XML_TYPE.GIFT) ? 'gift'
+            : ((xmlType === String(XML_TYPE.MINI_PROGRAM_V1) || xmlType === String(XML_TYPE.MINI_PROGRAM_V2)) ? 'miniapp'
+              : (((xmlType === String(XML_TYPE.LINK) || xmlType === String(XML_TYPE.LINK_V2)) && (sourceUsername.startsWith('gh_') || !!sourceName || appName.includes('公众号'))) ? 'official-link'
+                : (xmlType === String(XML_TYPE.VIDEO_ACCOUNT) ? 'finder'
+                  : (xmlType === String(XML_TYPE.MUSIC) ? 'music'
+                    : ((xmlType === String(XML_TYPE.LINK) || xmlType === String(XML_TYPE.LINK_V2)) ? 'link' // Fallback for standard links
                       : (!!musicUrl ? 'music' : '')))))))
       )
 
@@ -11518,13 +11503,8 @@ function MessageBubble({
             } catch { /* 解析失败降级 */ }
             return <span className="quoted-type-label">[链接]</span>
           }
-          // 各类型名称映射
-          const typeLabels: Record<string, string> = {
-            '3': '图片', '34': '语音', '43': '视频',
-            '50': '通话', '10000': '系统消息', '10002': '撤回消息',
-          }
-          if (referType && typeLabels[referType]) {
-            return <span className="quoted-type-label">[{typeLabels[referType]}]</span>
+          if (referType && REFER_TYPE_LABELS[referType]) {
+            return <span className="quoted-type-label">[{REFER_TYPE_LABELS[referType]}]</span>
           }
           return <>{renderTextWithEmoji(cleanMessageContent(referContent))}</>
         }

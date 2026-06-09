@@ -19,6 +19,7 @@ import { voiceTranscribeService } from './voiceTranscribeService'
 import { ImageDecryptService } from './imageDecryptService'
 import { CONTACT_REGION_LOOKUP_DATA } from './contactRegionLookupData'
 import { LRUCache } from '../utils/LRUCache.js'
+import { MSG_TYPE, XML_TYPE, CONTACT_TYPE, isFileAppLocalType, isSystemMessage, resolveResourceType, getMessageTypeLabel, FILE_APP_LOCAL_TYPE_SET } from '../../shared/messageTypes'
 
 export interface ChatSession {
   username: string
@@ -920,7 +921,7 @@ class ChatService {
           username,
           type: parseInt(row.type || '0', 10),
           unreadCount: parseInt(row.unread_count || row.unreadCount || row.unreadcount || '0', 10),
-          summary: summary || this.getMessageTypeLabel(lastMsgType),
+          summary: summary || getMessageTypeLabel(lastMsgType),
           sortTimestamp: sortTs,
           lastTimestamp: lastTs,
           lastMsgType,
@@ -1021,7 +1022,7 @@ class ChatService {
       return this.isAllowedEnterpriseOpenimByLocalType(username, localType)
     }
     if (lowered.startsWith('weixin') && lowered !== 'weixin') return true
-    return localType === 1 && !FRIEND_EXCLUDE_USERNAMES.has(username)
+    return localType === CONTACT_TYPE.FRIEND && !FRIEND_EXCLUDE_USERNAMES.has(username)
   }
 
   private async loadAntiRevokeContactMap(usernames: string[]): Promise<Map<string, { displayName?: string }>> {
@@ -1120,7 +1121,7 @@ class ChatService {
         username,
         type: parseInt(row.type || '0', 10),
         unreadCount: parseInt(row.unread_count || row.unreadCount || row.unreadcount || '0', 10),
-        summary: summary || this.getMessageTypeLabel(lastMsgType),
+        summary: summary || getMessageTypeLabel(lastMsgType),
         sortTimestamp: sortTs,
         lastTimestamp: lastTs,
         lastMsgType,
@@ -1324,32 +1325,32 @@ class ChatService {
     const cleanOfficialPrefix = (value: string): string => value.replace(/^\s*\[视频号\]\s*/u, '').trim()
     let summary = ''
     switch (Number(message.localType || 0)) {
-      case 1:
+      case MSG_TYPE.TEXT:
         summary = message.parsedContent || message.rawContent || ''
         break
-      case 3:
+      case MSG_TYPE.IMAGE:
         summary = '[图片]'
         break
-      case 34:
+      case MSG_TYPE.VOICE:
         summary = '[语音]'
         break
-      case 43:
+      case MSG_TYPE.VIDEO:
         summary = '[视频]'
         break
-      case 47:
+      case MSG_TYPE.EMOJI:
         summary = '[表情]'
         break
-      case 42:
+      case MSG_TYPE.CARD:
         summary = message.cardNickname || '[名片]'
         break
-      case 48:
+      case MSG_TYPE.LOCATION:
         summary = '[位置]'
         break
-      case 49:
+      case MSG_TYPE.APP_MESSAGE:
         summary = message.linkTitle || message.fileName || message.parsedContent || '[消息]'
         break
       default:
-        summary = message.parsedContent || message.rawContent || this.getMessageTypeLabel(Number(message.localType || 0))
+        summary = message.parsedContent || message.rawContent || getMessageTypeLabel(Number(message.localType || 0))
         break
     }
     return cleanOfficialPrefix(this.cleanString(summary))
@@ -2147,9 +2148,9 @@ class ChatService {
           type = 'friend'
         } else if (isVisibleWeixinContact) {
           type = 'friend'
-        } else if (localType === 1 && !FRIEND_EXCLUDE_USERNAMES.has(username)) {
+        } else if (localType === CONTACT_TYPE.FRIEND && !FRIEND_EXCLUDE_USERNAMES.has(username)) {
           type = 'friend'
-        } else if (localType === 0 && quanPin) {
+        } else if (localType === CONTACT_TYPE.NOT_FRIEND && quanPin) {
           type = 'former_friend'
         } else {
           continue
@@ -2692,7 +2693,7 @@ class ChatService {
       // 并发检查并修复缺失 CDN URL 的表情包
       const fixPromises: Promise<void>[] = []
       for (const msg of normalized) {
-        if (msg.localType === 47 && !msg.emojiCdnUrl && msg.emojiMd5) {
+        if (msg.localType === MSG_TYPE.EMOJI && !msg.emojiCdnUrl && msg.emojiMd5) {
           fixPromises.push(this.fallbackEmoticon(msg))
         }
       }
@@ -2865,7 +2866,7 @@ class ChatService {
   private async repairEmojiMessages(messages: Message[]): Promise<void> {
     const fixPromises: Promise<void>[] = []
     for (const msg of messages) {
-      if (msg.localType === 47 && !msg.emojiCdnUrl && msg.emojiMd5) {
+      if (msg.localType === MSG_TYPE.EMOJI && !msg.emojiCdnUrl && msg.emojiMd5) {
         fixPromises.push(this.fallbackEmoticon(msg))
       }
     }
@@ -3857,7 +3858,7 @@ class ChatService {
       if (FRIEND_EXCLUDE_USERNAMES.has(username)) continue
 
       const localType = this.getRowInt(row, ['local_type', 'localType', 'WCDB_CT_local_type'], 0)
-      if (localType !== 1) continue
+      if (localType !== MSG_TYPE.TEXT) continue
 
       for (const key of this.buildIdentityKeys(username)) {
         identities.add(key)
@@ -4348,26 +4349,26 @@ class ChatService {
         const rows = Array.isArray(batch.rows) ? batch.rows as Record<string, any>[] : []
         for (const row of rows) {
           const localType = this.getRowInt(row, ['local_type'], 1)
-          if (localType === 50) {
+          if (localType === MSG_TYPE.CALL) {
             counters.callMessages += 1
             continue
           }
-          if (localType === 8589934592049) {
+          if (localType === MSG_TYPE.TRANSFER) {
             counters.transferMessages += 1
             continue
           }
-          if (localType === 8594229559345) {
+          if (localType === MSG_TYPE.RED_PACKET) {
             counters.redPacketMessages += 1
             continue
           }
-          if (localType !== 49) continue
+          if (localType !== MSG_TYPE.APP_MESSAGE) continue
 
           const rawMessageContent = row.message_content
           const rawCompressContent = row.compress_content
           const content = this.decodeMessageContent(rawMessageContent, rawCompressContent)
           const xmlType = this.extractType49XmlTypeForStats(content)
-          if (xmlType === '2000') counters.transferMessages += 1
-          if (xmlType === '2001') counters.redPacketMessages += 1
+          if (xmlType === String(XML_TYPE.TRANSFER)) counters.transferMessages += 1
+          if (xmlType === String(XML_TYPE.RED_PACKET)) counters.redPacketMessages += 1
         }
 
         if (!batch.hasMore || rows.length === 0) break
@@ -4419,20 +4420,20 @@ class ChatService {
           stats.totalMessages += 1
 
           const localType = this.getRowInt(row, ['local_type'], 1)
-          if (localType === 34) stats.voiceMessages += 1
-          if (localType === 3) stats.imageMessages += 1
-          if (localType === 43) stats.videoMessages += 1
-          if (localType === 47) stats.emojiMessages += 1
-          if (localType === 50) stats.callMessages += 1
-          if (localType === 8589934592049) stats.transferMessages += 1
-          if (localType === 8594229559345) stats.redPacketMessages += 1
-          if (localType === 49) {
+          if (localType === MSG_TYPE.VOICE) stats.voiceMessages += 1
+          if (localType === MSG_TYPE.IMAGE) stats.imageMessages += 1
+          if (localType === MSG_TYPE.VIDEO) stats.videoMessages += 1
+          if (localType === MSG_TYPE.EMOJI) stats.emojiMessages += 1
+          if (localType === MSG_TYPE.CALL) stats.callMessages += 1
+          if (localType === MSG_TYPE.TRANSFER) stats.transferMessages += 1
+          if (localType === MSG_TYPE.RED_PACKET) stats.redPacketMessages += 1
+          if (localType === MSG_TYPE.APP_MESSAGE) {
             const rawMessageContent = row.message_content
             const rawCompressContent = row.compress_content
             const content = this.decodeMessageContent(rawMessageContent, rawCompressContent)
             const xmlType = this.extractType49XmlTypeForStats(content)
-            if (xmlType === '2000') stats.transferMessages += 1
-            if (xmlType === '2001') stats.redPacketMessages += 1
+            if (xmlType === String(XML_TYPE.TRANSFER)) stats.transferMessages += 1
+            if (xmlType === String(XML_TYPE.RED_PACKET)) stats.redPacketMessages += 1
           }
 
           const createTime = this.getRowInt(
@@ -5075,14 +5076,14 @@ class ChatService {
         chatRecordList?: any[]
       }> | undefined
 
-      if (localType === 47 && content) {
+      if (localType === MSG_TYPE.EMOJI && content) {
         const emojiInfo = this.parseEmojiInfo(content)
         emojiCdnUrl = emojiInfo.cdnUrl
         emojiMd5 = emojiInfo.md5
         cdnThumbUrl = emojiInfo.thumbUrl // 复用 cdnThumbUrl 字段或使用 emojiThumbUrl
         // 注意：Message 接口定义的 emojiThumbUrl，这里我们统一一下
         // 如果 Message 接口有 emojiThumbUrl，则使用它
-      } else if (localType === 3 && content) {
+      } else if (localType === MSG_TYPE.IMAGE && content) {
         const imageInfo = this.parseImageInfo(content)
         imageMd5 = imageInfo.md5
         aesKey = imageInfo.aesKey
@@ -5093,26 +5094,26 @@ class ChatService {
         const quoteInfo = this.parseMediaQuoteMessage(content, sessionId)
         if (quoteInfo.content) quotedContent = quoteInfo.content
         if (quoteInfo.sender) quotedSender = quoteInfo.sender
-      } else if (localType === 43) {
+      } else if (localType === MSG_TYPE.VIDEO) {
         // 视频消息：优先从 packed_info_data 提取真实文件名（32位十六进制），再回退 XML
         videoMd5 = this.parseVideoFileNameFromRow(row, content)
         // 解析视频消息中的引用信息
         const quoteInfo = this.parseMediaQuoteMessage(content, sessionId)
         if (quoteInfo.content) quotedContent = quoteInfo.content
         if (quoteInfo.sender) quotedSender = quoteInfo.sender
-      } else if (localType === 34 && content) {
+      } else if (localType === MSG_TYPE.VOICE && content) {
         voiceDurationSeconds = this.parseVoiceDurationSeconds(content)
         // 解析语音消息中的引用信息
         const quoteInfo = this.parseMediaQuoteMessage(content, sessionId)
         if (quoteInfo.content) quotedContent = quoteInfo.content
         if (quoteInfo.sender) quotedSender = quoteInfo.sender
-      } else if (localType === 42 && content) {
+      } else if (localType === MSG_TYPE.CARD && content) {
         // 名片消息
         const cardInfo = this.parseCardInfo(content)
         cardUsername = cardInfo.username
         cardNickname = cardInfo.nickname
         cardAvatarUrl = cardInfo.avatarUrl
-      } else if (localType === 48 && content) {
+      } else if (localType === MSG_TYPE.LOCATION && content) {
         // 位置消息
         const latStr = this.extractXmlAttribute(content, 'location', 'x') || this.extractXmlAttribute(content, 'location', 'latitude')
         const lngStr = this.extractXmlAttribute(content, 'location', 'y') || this.extractXmlAttribute(content, 'location', 'longitude')
@@ -5120,7 +5121,7 @@ class ChatService {
         if (lngStr) { const v = parseFloat(lngStr); if (Number.isFinite(v)) locationLng = v }
         locationLabel = this.extractXmlAttribute(content, 'location', 'label') || this.extractXmlValue(content, 'label') || undefined
         locationPoiname = this.extractXmlAttribute(content, 'location', 'poiname') || this.extractXmlValue(content, 'poiname') || undefined
-      } else if ((localType === 49 || localType === 8589934592049) && content) {
+      } else if ((localType === MSG_TYPE.APP_MESSAGE || localType === MSG_TYPE.TRANSFER) && content) {
         // Type 49 消息（链接、文件、小程序、转账等），8589934592049 也是转账类型
         const type49Info = this.parseType49Message(content)
         xmlType = type49Info.xmlType
@@ -5138,7 +5139,7 @@ class ChatService {
         // 引用消息（appmsg type=57）的 quotedContent/quotedSender
         if (type49Info.quotedContent !== undefined) quotedContent = type49Info.quotedContent
         if (type49Info.quotedSender !== undefined) quotedSender = type49Info.quotedSender
-      } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
+      } else if (localType === MSG_TYPE.QUOTE_TEXT || (content && content.includes('<type>57</type>'))) {
         const quoteInfo = this.parseQuoteMessage(content)
         quotedContent = quoteInfo.content
         quotedSender = quoteInfo.sender
@@ -5263,7 +5264,7 @@ class ChatService {
         _db_path: sourceInfo.dbPath
       })
       const last = messages[messages.length - 1]
-      if ((last.localType === 3 || last.localType === 34) && (last.localId === 0 || last.createTime === 0)) {
+      if ((last.localType === MSG_TYPE.IMAGE || last.localType === MSG_TYPE.VOICE) && (last.localId === 0 || last.createTime === 0)) {
         console.warn('[ChatService] message key missing', {
           localType: last.localType,
           localId: last.localId,
@@ -5280,7 +5281,7 @@ class ChatService {
    */
   private parseMessageContent(content: string, localType: number): string {
     if (!content) {
-      return this.getMessageTypeLabel(localType)
+      return getMessageTypeLabel(localType)
     }
 
     // 尝试解码 Buffer
@@ -5296,19 +5297,19 @@ class ChatService {
     const looksLikeAppMsg = content.includes('<appmsg') || content.includes('&lt;appmsg')
 
     switch (localType) {
-      case 1:
+      case MSG_TYPE.TEXT:
         return this.stripSenderPrefix(content)
-      case 3:
+      case MSG_TYPE.IMAGE:
         return '[图片]'
-      case 34:
+      case MSG_TYPE.VOICE:
         return '[语音消息]'
-      case 42:
+      case MSG_TYPE.CARD:
         return '[名片]'
-      case 43:
+      case MSG_TYPE.VIDEO:
         return '[视频]'
-      case 47:
+      case MSG_TYPE.EMOJI:
         return '[动画表情]'
-      case 48: {
+      case MSG_TYPE.LOCATION: {
         const label =
           this.extractXmlAttribute(content, 'location', 'label') ||
           this.extractXmlAttribute(content, 'location', 'poiname') ||
@@ -5316,27 +5317,27 @@ class ChatService {
           this.extractXmlValue(content, 'poiname')
         return label ? `[位置] ${label}` : '[位置]'
       }
-      case 49:
+      case MSG_TYPE.APP_MESSAGE:
         return this.parseType49(content)
-      case 50:
+      case MSG_TYPE.CALL:
         return this.parseVoipMessage(content)
-      case 10000:
+      case MSG_TYPE.SYSTEM:
         return this.cleanSystemMessage(content)
-      case 244813135921:
+      case MSG_TYPE.QUOTE_TEXT:
         // 引用消息，提取 title
         const title = this.extractXmlValue(content, 'title')
         return title || '[引用消息]'
-      case 266287972401:
+      case MSG_TYPE.PAT:
         return this.cleanPatMessage(content)
-      case 81604378673:
+      case MSG_TYPE.CHAT_RECORD:
         return '[聊天记录]'
-      case 8594229559345:
+      case MSG_TYPE.RED_PACKET:
         return '[红包]'
-      case 8589934592049:
+      case MSG_TYPE.TRANSFER:
         return '[转账]'
       default:
         // 检查是否是 type=87 的群公告消息
-        if (xmlType === '87') {
+        if (xmlType === String(XML_TYPE.VOIP)) {
           const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
           if (textAnnouncement) {
             return `[群公告] ${textAnnouncement}`
@@ -5345,7 +5346,7 @@ class ChatService {
         }
 
         // 检查是否是 type=57 的引用消息
-        if (xmlType === '57') {
+        if (xmlType === String(XML_TYPE.QUOTE)) {
           const title = this.extractXmlValue(content, 'title')
           return title || '[引用消息]'
         }
@@ -5361,9 +5362,9 @@ class ChatService {
         }
 
         if (content.length > 200) {
-          return this.getMessageTypeLabel(localType)
+          return getMessageTypeLabel(localType)
         }
-        return this.stripSenderPrefix(content) || this.getMessageTypeLabel(localType)
+        return this.stripSenderPrefix(content) || getMessageTypeLabel(localType)
     }
   }
 
@@ -5831,7 +5832,7 @@ class ChatService {
           // 嵌套引用的 referContent 中 xmlType=57，真正的链接 xmlType=49 或 5
           const decodedReferContent = this.decodeHtmlEntities(referContent || '')
           const innerInfo = this.parseType49Message(decodedReferContent)
-          if (innerInfo.xmlType === '57' && innerInfo.linkTitle) {
+          if (innerInfo.xmlType === String(XML_TYPE.QUOTE) && innerInfo.linkTitle) {
             displayContent = innerInfo.linkTitle
           } else {
             displayContent = '[链接]'
@@ -5947,17 +5948,17 @@ class ChatService {
 
         console.log('[DEBUG] resolveQuotedMessages - 解码后:', { localType, contentLength: content.length, contentPreview: content.substring(0, 50) })
 
-        if (localType === 1) {
+        if (localType === MSG_TYPE.TEXT) {
           msg.quotedContent = this.sanitizeQuotedContent(content)
-        } else if (localType === 3) {
+        } else if (localType === MSG_TYPE.IMAGE) {
           msg.quotedContent = '[图片]'
-        } else if (localType === 34) {
+        } else if (localType === MSG_TYPE.VOICE) {
           msg.quotedContent = '[语音]'
-        } else if (localType === 43) {
+        } else if (localType === MSG_TYPE.VIDEO) {
           msg.quotedContent = '[视频]'
-        } else if (localType === 47) {
+        } else if (localType === MSG_TYPE.EMOJI) {
           msg.quotedContent = '[动画表情]'
-        } else if (localType === 49) {
+        } else if (localType === MSG_TYPE.APP_MESSAGE) {
           msg.quotedContent = '[链接]'
         } else {
           msg.quotedContent = '[消息]'
@@ -6188,9 +6189,9 @@ class ChatService {
         this.extractXmlValue(content, 'findernickname') ||
         this.extractXmlValue(content, 'finder_nickname')
       const normalized = content.toLowerCase()
-      const isFinder = xmlType === '51'
-      const isRedPacket = xmlType === '2001'
-      const isMusic = xmlType === '3'
+      const isFinder = xmlType === String(XML_TYPE.VIDEO_ACCOUNT)
+      const isRedPacket = xmlType === String(XML_TYPE.RED_PACKET)
+      const isMusic = xmlType === String(XML_TYPE.MUSIC)
       const isLocation = Boolean(locationLabel)
 
       result.linkTitle = title || undefined
@@ -6242,7 +6243,7 @@ class ChatService {
       }
 
       // 礼物消息
-      const isGift = xmlType === '115'
+      const isGift = xmlType === String(XML_TYPE.GIFT)
       if (isGift) {
         result.giftWish = this.extractXmlValue(content, 'wishmessage') || undefined
         result.giftImageUrl = this.extractXmlValue(content, 'skuimgurl') || undefined
@@ -6259,25 +6260,25 @@ class ChatService {
         result.appMsgKind = 'location'
       } else if (isMusic) {
         result.appMsgKind = 'music'
-      } else if (xmlType === '33' || xmlType === '36') {
+      } else if (xmlType === String(XML_TYPE.MINI_PROGRAM_V1) || xmlType === String(XML_TYPE.MINI_PROGRAM_V2)) {
         result.appMsgKind = 'miniapp'
-      } else if (xmlType === '6') {
+      } else if (xmlType === String(XML_TYPE.FILE)) {
         result.appMsgKind = 'file'
-      } else if (xmlType === '19') {
+      } else if (xmlType === String(XML_TYPE.CHAT_RECORD)) {
         result.appMsgKind = 'chat-record'
-      } else if (xmlType === '2000') {
+      } else if (xmlType === String(XML_TYPE.TRANSFER)) {
         result.appMsgKind = 'transfer'
-      } else if (xmlType === '87') {
+      } else if (xmlType === String(XML_TYPE.VOIP)) {
         result.appMsgKind = 'announcement'
-      } else if (xmlType === '57') {
+      } else if (xmlType === String(XML_TYPE.QUOTE)) {
         // 引用回复消息，解析 refermsg
         result.appMsgKind = 'quote'
         const quoteInfo = this.parseQuoteMessage(content)
         result.quotedContent = quoteInfo.content
         result.quotedSender = quoteInfo.sender
-      } else if (xmlType === '53') {
+      } else if (xmlType === String(XML_TYPE.SOLITAIRE)) {
         result.appMsgKind = 'solitaire'
-      } else if ((xmlType === '5' || xmlType === '49') && (sourceUsername?.startsWith('gh_') || appName?.includes('公众号') || sourceName)) {
+      } else if ((xmlType === String(XML_TYPE.LINK) || xmlType === String(XML_TYPE.LINK_V2)) && (sourceUsername?.startsWith('gh_') || appName?.includes('公众号') || sourceName)) {
         result.appMsgKind = 'official-link'
       } else if (url) {
         result.appMsgKind = 'link'
@@ -6856,31 +6857,6 @@ class ChatService {
     // 标准化空白
     result = result.replace(/\s+/g, ' ').trim()
     return result
-  }
-
-  private getMessageTypeLabel(localType: number): string {
-    const labels: Record<number, string> = {
-      1: '[文本]',
-      3: '[图片]',
-      34: '[语音]',
-      42: '[名片]',
-      43: '[视频]',
-      47: '[动画表情]',
-      48: '[位置]',
-      49: '[链接]',
-      50: '[通话]',
-      10000: '[系统消息]',
-      244813135921: '[引用消息]',
-      266287972401: '拍一拍',
-      81604378673: '[聊天记录]',
-      154618822705: '[小程序]',
-      8594229559345: '[红包]',
-      8589934592049: '[转账]',
-      34359738417: '[文件]',
-      103079215153: '[文件]',
-      25769803825: '[文件]'
-    }
-    return labels[localType] || '[消息]'
   }
 
   private extractXmlValue(xml: string, tagName: string): string {
@@ -8276,7 +8252,7 @@ class ChatService {
           }
 
           // localId 在不同表可能重复，反查命中非语音时不覆盖调用侧入参
-          if (Number(dbMsg.localType) === 34) {
+          if (Number(dbMsg.localType) === MSG_TYPE.VOICE) {
             locatedMsg = dbMsg
             msgCreateTime = dbMsg.createTime || msgCreateTime
             senderWxid = dbMsg.senderUsername || senderWxid || null
@@ -9004,7 +8980,7 @@ class ChatService {
         return { success: false, error: connectResult.error || '数据库未连接' }
       }
 
-      const result = await wcdbService.getMessagesByType(sessionId, 34, false, 0, 0)
+      const result = await wcdbService.getMessagesByType(sessionId, MSG_TYPE.VOICE, false, 0, 0)
       if (!result.success || !Array.isArray(result.rows)) {
         return { success: false, error: result.error || '查询语音消息失败' }
       }
@@ -9047,14 +9023,14 @@ class ChatService {
         return { success: false, error: connectResult.error || '数据库未连接' }
       }
 
-      const result = await wcdbService.getMessagesByType(sessionId, 3, false, 0, 0)
+      const result = await wcdbService.getMessagesByType(sessionId, MSG_TYPE.IMAGE, false, 0, 0)
       if (!result.success || !Array.isArray(result.rows)) {
         return { success: false, error: result.error || '查询图片消息失败' }
       }
 
       const mapped = this.mapRowsToMessages(result.rows as Record<string, any>[], sessionId)
       let allImages: Array<{ imageMd5?: string; imageDatName?: string; createTime?: number }> = mapped
-        .filter(msg => msg.localType === 3)
+        .filter(msg => msg.localType === MSG_TYPE.IMAGE)
         .map(msg => ({
           imageMd5: msg.imageMd5 || undefined,
           imageDatName: msg.imageDatName || undefined,
@@ -9078,22 +9054,6 @@ class ChatService {
       console.error('[ChatService] 获取全部图片消息失败:', e)
       return { success: false, error: String(e) }
     }
-  }
-
-  private resolveResourceType(message: Message): ResourceMessageType | null {
-    if (message.localType === 3) return 'image'
-    if (message.localType === 43) return 'video'
-    if (message.localType === 34) return 'voice'
-    if (
-      message.localType === 49 ||
-      message.localType === 34359738417 ||
-      message.localType === 103079215153 ||
-      message.localType === 25769803825
-    ) {
-      if (message.appMsgKind === 'file' || message.xmlType === '6') return 'file'
-      if (message.localType !== 49) return 'file'
-    }
-    return null
   }
 
   async getResourceMessages(options?: {
@@ -9144,11 +9104,11 @@ class ChatService {
         : sortedSessions.map((session) => session.username)
 
       const localTypes: number[] = []
-      if (typeSet.has('image')) localTypes.push(3)
-      if (typeSet.has('video')) localTypes.push(43)
-      if (typeSet.has('voice')) localTypes.push(34)
+      if (typeSet.has('image')) localTypes.push(MSG_TYPE.IMAGE)
+      if (typeSet.has('video')) localTypes.push(MSG_TYPE.VIDEO)
+      if (typeSet.has('voice')) localTypes.push(MSG_TYPE.VOICE)
       if (typeSet.has('file')) {
-        localTypes.push(49, 34359738417, 103079215153, 25769803825)
+        localTypes.push(MSG_TYPE.APP_MESSAGE, MSG_TYPE.FILE_V1, MSG_TYPE.FILE_V2, MSG_TYPE.FILE_V3)
       }
       const uniqueLocalTypes = Array.from(new Set(localTypes))
 
@@ -9179,7 +9139,7 @@ class ChatService {
 
           const mapped = this.mapRowsToMessages(result.rows as Record<string, any>[], sessionId)
           for (const message of mapped) {
-            const resourceType = this.resolveResourceType(message)
+            const resourceType = resolveResourceType(message.localType, message.appMsgKind, message.xmlType)
             if (!resourceType || !typeSet.has(resourceType)) continue
             if (beginTimestamp > 0 && message.createTime < beginTimestamp) continue
             if (endTimestamp > 0 && message.createTime > endTimestamp) continue
@@ -11597,20 +11557,20 @@ class ChatService {
     }
 
     // 图片/语音解析逻辑 (简化示例，实际应调用现有解析方法)
-    if (msg.localType === 3) { // Image
+    if (msg.localType === MSG_TYPE.IMAGE) { // Image
       const imgInfo = this.parseImageInfo(rawContent)
       Object.assign(msg, imgInfo)
       msg.imageDatName = this.parseImageDatNameFromRow(row)
-    } else if (msg.localType === 43) { // Video
+    } else if (msg.localType === MSG_TYPE.VIDEO) { // Video
       msg.videoMd5 = this.parseVideoFileNameFromRow(row, rawContent)
-    } else if (msg.localType === 47) { // Emoji
+    } else if (msg.localType === MSG_TYPE.EMOJI) { // Emoji
       const emojiInfo = this.parseEmojiInfo(rawContent)
       msg.emojiCdnUrl = emojiInfo.cdnUrl
       msg.emojiMd5 = emojiInfo.md5
       msg.emojiThumbUrl = emojiInfo.thumbUrl
       msg.emojiEncryptUrl = emojiInfo.encryptUrl
       msg.emojiAesKey = emojiInfo.aesKey
-    } else if (msg.localType === 42) {
+    } else if (msg.localType === MSG_TYPE.CARD) {
       const cardInfo = this.parseCardInfo(rawContent)
       msg.cardUsername = cardInfo.username
       msg.cardNickname = cardInfo.nickname

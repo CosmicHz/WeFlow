@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ChatSession, Message, Contact } from '../types/models'
+import { MSG_TYPE } from '../../shared/messageTypes'
 
 const messageAliasIndex = new Set<string>()
 
@@ -36,7 +37,7 @@ function buildMessageAliasKeys(message: Message): string[] {
       keys.push(`sid_fallback:${serverId}:${createTime}:${sender}:${localType}`)
     }
   }
-  if (localType === 3) {
+  if (localType === MSG_TYPE.IMAGE) {
     const imageIdentity = String(message.imageMd5 || message.imageDatName || '').trim()
     if (imageIdentity) {
       keys.push(`img:${sourceScope}:${createTime}:${sender}:${isSend}:${imageIdentity}`)

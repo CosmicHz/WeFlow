@@ -20,5 +20,8 @@
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts", "shared/**/*.json"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "references": [
+    { "path": "./tsconfig.shared.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }

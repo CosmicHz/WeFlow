@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, readFileS
 import { tmpdir } from 'os'
 import * as fzstd from 'fzstd'
 import { expandHomePath } from '../utils/pathUtils'
+import { MSG_TYPE, CONTACT_TYPE } from '../../shared/messageTypes'
 
 //数据服务初始化错误信息，用于帮助用户诊断问题
 let lastDllInitError: string | null = null
@@ -660,9 +661,9 @@ export class WcdbCore {
         counts.group += 1
       } else if (username.startsWith('gh_')) {
         counts.official += 1
-      } else if (localType === 1 && !excludeNames.has(username)) {
+      } else if (localType === CONTACT_TYPE.FRIEND && !excludeNames.has(username)) {
         counts.private += 1
-      } else if (localType === 0 && quanPin) {
+      } else if (localType === CONTACT_TYPE.NOT_FRIEND && quanPin) {
         counts.former_friend += 1
       }
     }
@@ -2521,7 +2522,7 @@ export class WcdbCore {
         let imageDatName: string | undefined
         let videoMd5: string | undefined
 
-        if (localType === 3) {
+        if (localType === MSG_TYPE.IMAGE) {
           imageMd5 = imageMd5ByColumn || extractHexMd5(packedPayload) || undefined
           imageDatName = extractImageDatName(row, '') || undefined
           if (!imageMd5 || !imageDatName) {
@@ -2529,7 +2530,7 @@ export class WcdbCore {
             if (!imageMd5) imageMd5 = extractImageMd5(content) || extractHexMd5(packedPayload) || undefined
             if (!imageDatName) imageDatName = extractImageDatName(row, content) || undefined
           }
-        } else if (localType === 43) {
+        } else if (localType === MSG_TYPE.VIDEO) {
           videoMd5 =
             extractVideoFileNameFromPackedRaw(packedRaw) ||
             normalizeVideoFileToken(videoMd5ByColumn) ||
@@ -2550,7 +2551,7 @@ export class WcdbCore {
         return {
           sessionId,
           sessionDisplayName: sessionNameMap.get(sessionId) || sessionId,
-          mediaType: localType === 43 ? 'video' as const : 'image' as const,
+          mediaType: localType === MSG_TYPE.VIDEO ? 'video' as const : 'image' as const,
           localId: toInt(row.local_id ?? row.localId),
           serverId: pickString(row, ['server_id', 'serverId']) || undefined,
           createTime: toInt(row.create_time ?? row.createTime),
@@ -2560,7 +2561,7 @@ export class WcdbCore {
           imageMd5,
           imageDatName,
           videoMd5,
-          content: localType === 43 ? (content || undefined) : undefined
+          content: localType === MSG_TYPE.VIDEO ? (content || undefined) : undefined
         }
       })
 

@@ -17,5 +17,8 @@
     "electron/**/*.ts",
     "electron/**/*.d.ts",
     "shared/**/*.json"
+  ],
+  "references": [
+    { "path": "./tsconfig.shared.json" }
   ]
 }
