@@ -127,7 +127,7 @@ jobs:
       - name: Build Frontend & Type Check
         shell: bash
         run: |
-          npx tsc --build
+          npx tsc -p tsconfig.shared.json
           npx vite build
 
       - name: Package and Publish Linux
